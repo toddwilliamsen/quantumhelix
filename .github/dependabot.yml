@@ -1,0 +1,23 @@
+# Dependabot keeps Quantum-Safeguard on the latest stable Python packages.
+# Quantum / scientific stacks churn quickly — weekly checks are intentional.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "quantum-stack"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    # Prefer official latest stables; ignore prereleases.
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore: []

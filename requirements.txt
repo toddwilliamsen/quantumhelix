@@ -1,0 +1,25 @@
+# Quantum Helix — production dependencies (latest stable pins)
+# Regenerated against PyPI. Keep these exact pins in sync via:
+#   python check_deps.py --update
+#   or GitHub Dependabot (.github/dependabot.yml)
+#
+# Policy: only stable (non-dev / non-pre-release) versions.
+# PennyLane 0.45+ requires Python >= 3.11.
+# autoray is locked to the exact version declared by the pinned PennyLane release.
+
+pennylane==0.45.1
+autoray==0.8.4
+pandas==3.0.3
+scikit-learn==1.9.0
+numpy==2.5.1
+streamlit==1.59.2
+click==8.4.2
+requests==2.34.2
+
+# Compatibility guard declared by PennyLane 0.45.1
+autograd>=1.8,<1.9
+flask==3.1.0
+flask-cors==5.0.0
+flask-sqlalchemy==3.1.1
+pyjwt==2.9.0
+gunicorn

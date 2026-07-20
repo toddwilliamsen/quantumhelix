@@ -1,0 +1,98 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "webAppName": {
+      "type": "string",
+      "metadata": {
+        "description": "Web app name (must be globally unique)."
+      },
+      "defaultValue": "quantum-helix-demo"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "westus2",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "metadata": {
+        "description": "App Service Plan SKU. B1 recommended; F1 often has quota 0."
+      }
+    },
+    "linuxFxVersion": {
+      "type": "string",
+      "defaultValue": "PYTHON|3.12",
+      "metadata": {
+        "description": "Must be 3.12+ — numpy 2.5.x requires Python >= 3.12."
+      }
+    }
+  },
+  "variables": {
+    "appServicePlanName": "[format('plan-{0}', parameters('webAppName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2022-03-01",
+      "name": "[variables('appServicePlanName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('sku')]"
+      },
+      "kind": "linux",
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2022-03-01",
+      "name": "[parameters('webAppName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]"
+      ],
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "linuxFxVersion": "[parameters('linuxFxVersion')]",
+          "alwaysOn": true,
+          "appCommandLine": "gunicorn --bind=0.0.0.0:8000 --timeout 600 --threads 4 api:app",
+          "ftpsState": "Disabled"
+        }
+      },
+      "resources": [
+        {
+          "type": "config",
+          "apiVersion": "2022-03-01",
+          "name": "appsettings",
+          "dependsOn": [
+            "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+          ],
+          "properties": {
+            "SCM_DO_BUILD_DURING_DEPLOYMENT": "true",
+            "ENABLE_ORYX_BUILD": "true",
+            "WEBSITES_PORT": "8000",
+            "SECRET_KEY": "quantum-dev-secret-key-2026"
+          }
+        }
+      ]
+    }
+  ],
+  "outputs": {
+    "webAppUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', parameters('webAppName'))).defaultHostName)]"
+    },
+    "linuxFxVersion": {
+      "type": "string",
+      "value": "[parameters('linuxFxVersion')]"
+    }
+  }
+}

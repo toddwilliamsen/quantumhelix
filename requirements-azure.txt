@@ -1,0 +1,19 @@
+# Azure App Service runtime deps (Flask API + hybrid detection stack).
+# Kept separate from local requirements.txt so Streamlit / CLI-only packages
+# are not installed during Oryx remote builds (slow + memory-heavy on B1).
+#
+# Requires App Service stack: PYTHON|3.12 (numpy 2.5.x needs Python >= 3.12).
+
+pennylane==0.45.1
+autoray==0.8.4
+pandas==3.0.3
+scikit-learn==1.9.0
+numpy==2.5.1
+requests==2.34.2
+autograd>=1.8,<1.9
+
+flask==3.1.0
+flask-cors==5.0.0
+flask-sqlalchemy==3.1.1
+pyjwt==2.9.0
+gunicorn==23.0.0
