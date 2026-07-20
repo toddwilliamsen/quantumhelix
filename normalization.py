@@ -159,6 +159,36 @@ class MultiCloudLogParser:
         logger.debug("Parsed Azure event id=%s identity=%s", event_id, identity)
         return event
 
+    def parse_gcp(self, raw_json: Dict[str, Any]) -> CloudSecurityEvent:
+        """
+        Map GCP Cloud Audit Logs style fields to the CIM.
+        """
+        identity = _safe_get(raw_json, "protoPayload", "authenticationInfo", "principalEmail", default="")
+        if not identity:
+            identity = str(raw_json.get("principalEmail", "gcp:unknown"))
+
+        source_ip = _safe_get(raw_json, "protoPayload", "requestMetadata", "callerIp", default="0.0.0.0")
+        
+        bytes_out = float(raw_json.get("bytesOut", 0))
+        auth_failures = float(raw_json.get("authFailureCount", 0))
+        api_velocity = float(raw_json.get("apiVelocity", 0))
+
+        timestamp = str(raw_json.get("timestamp", _utc_now_iso()))
+        event_id = str(raw_json.get("insertId", ""))
+
+        event = CloudSecurityEvent(
+            timestamp=timestamp,
+            normalized_identity=str(identity),
+            source_ip=source_ip,
+            api_velocity=api_velocity,
+            auth_failures=auth_failures,
+            data_volume_bytes=bytes_out,
+            cloud_provider="GCP",
+            raw_event_id=event_id,
+        )
+        logger.debug("Parsed GCP event id=%s identity=%s", event_id, identity)
+        return event
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -253,6 +283,46 @@ def _build_azure_record(
     }
 
 
+def _build_gcp_record(
+    rng: random.Random,
+    *,
+    anomalous: bool,
+    index: int,
+) -> Dict[str, Any]:
+    """Construct a synthetic GCP Cloud Audit Log-like JSON record."""
+    if anomalous:
+        api_velocity = rng.uniform(80.0, 115.0)
+        auth_failures = rng.uniform(10.0, 35.0)
+        bytes_out = rng.uniform(4e8, 1.8e9)
+        identity = f"svc-shadow-{index}@gcp-project.iam.gserviceaccount.com"
+    else:
+        api_velocity = rng.uniform(1.0, 20.0)
+        auth_failures = rng.uniform(0.0, 1.0)
+        bytes_out = rng.uniform(1e3, 3e6)
+        identity = f"dev-user-{rng.randint(1, 15)}@gcp-project.iam.gserviceaccount.com"
+
+    return {
+        "insertId": f"gcp-evt-{index:06d}",
+        "timestamp": _utc_now_iso(),
+        "resource": {
+            "type": "gce_instance",
+            "labels": {"instance_id": f"{rng.randint(1000, 9999)}"}
+        },
+        "protoPayload": {
+            "authenticationInfo": {
+                "principalEmail": identity
+            },
+            "requestMetadata": {
+                "callerIp": _random_ip(rng)
+            },
+            "methodName": "v1.compute.instances.insert" if anomalous else "v1.compute.instances.get"
+        },
+        "bytesOut": bytes_out,
+        "apiVelocity": api_velocity,
+        "authFailureCount": auth_failures
+    }
+
+
 def generate_mock_stream(
     num_events: int = 100,
     seed: Optional[int] = 42,
@@ -284,13 +354,16 @@ def generate_mock_stream(
 
     for index in range(num_events):
         anomalous = index in anomaly_indices
-        use_aws = rng.random() < 0.5
-        if use_aws:
+        cloud_choice = rng.choice(["AWS", "Azure", "GCP"])
+        if cloud_choice == "AWS":
             raw = _build_aws_record(rng, anomalous=anomalous, index=index)
             event = parser.parse_aws(raw)
-        else:
+        elif cloud_choice == "Azure":
             raw = _build_azure_record(rng, anomalous=anomalous, index=index)
             event = parser.parse_azure(raw)
+        else:
+            raw = _build_gcp_record(rng, anomalous=anomalous, index=index)
+            event = parser.parse_gcp(raw)
         yield event
 
 

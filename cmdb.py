@@ -23,6 +23,13 @@ MOCK_CMDB = {
         "business_criticality": "Tier 3",
         "asset_type": "User Account",
         "description": "Sandbox/Test Account"
+    },
+    "gcp-project.iam.gserviceaccount.com": {
+        "owner": "Data Science",
+        "department": "Analytics",
+        "business_criticality": "Tier 2",
+        "asset_type": "GCP Service Account",
+        "description": "BigQuery Data Ingestion"
     }
 }
 
