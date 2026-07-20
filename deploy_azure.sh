@@ -111,7 +111,10 @@ cleanup() { rm -rf "$STAGE" "${ROOT}/deploy.zip"; }
 trap cleanup EXIT
 
 PY_MODULES=(
-  api.py
+  app.py
+  routes.py
+  simulation.py
+  state.py
   models.py
   alerter.py
   apt_corpus.py

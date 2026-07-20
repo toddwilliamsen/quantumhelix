@@ -154,7 +154,19 @@ function Analytics() {
         </div>
       </div>
 
-      {!benchmark ? null : (
+      {loading ? (
+        <div className="card">
+          <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center' }}>
+            Offline Benchmark Metrics <InfoBubble text="Evaluation metrics from the latest offline benchmark suite." />
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ height: '2rem', background: 'var(--bg-primary)', borderRadius: '4px', animation: 'pulse 1.5s infinite' }} />
+            <div style={{ height: '2rem', background: 'var(--bg-primary)', borderRadius: '4px', animation: 'pulse 1.5s infinite' }} />
+            <div style={{ height: '2rem', background: 'var(--bg-primary)', borderRadius: '4px', animation: 'pulse 1.5s infinite' }} />
+            <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }`}</style>
+          </div>
+        </div>
+      ) : !benchmark ? null : (
         <div className="card">
           <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center' }}>
             Offline Benchmark Metrics <InfoBubble text="Evaluation metrics from the latest offline benchmark suite." />
