@@ -3,7 +3,7 @@
 #
 # Fixes vs previous script:
 #   - Forces PYTHON|3.12 (numpy 2.5.x is incompatible with Oryx's default 3.11)
-#   - Uses slim requirements-azure.txt (no Streamlit)
+#   - Uses slim requirements-prod.txt (no Streamlit)
 #   - Zips only runtime files (not frontend/, logs, docs, .venv)
 #   - Synchronous zip deploy with status polling (no false "success")
 #   - Non-interactive RG rebuild via REBUILD_RG=y
@@ -131,7 +131,7 @@ for f in "${PY_MODULES[@]}"; do
   cp "$f" "$STAGE/"
 done
 
-cp requirements-azure.txt "$STAGE/requirements.txt"
+cp requirements-prod.txt "$STAGE/requirements.txt"
 cp -R static "$STAGE/static"
 
 (

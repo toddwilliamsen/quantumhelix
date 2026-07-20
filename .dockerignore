@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.env
+
+# Flask/SQLite
+instance/
+*.sqlite3
+*.db
+
+# Node/React
+node_modules/
+frontend/node_modules/
+frontend/
+dist/
+build/
+.DS_Store
+
+# Git
+.git
+.github
+
+# Logs & Archives
+*.log
+logs_unzipped/
+*.zip
+
+# Cloud Providers
+.ebextensions/
