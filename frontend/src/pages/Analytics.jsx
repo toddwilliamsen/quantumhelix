@@ -19,6 +19,28 @@ function Analytics() {
     }
   };
 
+  const downloadReport = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/alerts/export', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to download');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'alerts_export.csv';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to download report");
+    }
+  };
+
   // Mock data for Feature Space Explorer
   const scatterData = [
     { x: 10, y: 30, z: 200, type: 'normal' },
@@ -52,9 +74,14 @@ function Analytics() {
           <h1 className="page-title">Analytics & Models</h1>
           <p className="page-subtitle">Deep dive into the PCA feature space, quantum vs classical disagreements, and latency metrics.</p>
         </div>
-        <button className="btn btn-primary" onClick={runBenchmark} disabled={loading}>
-          {loading ? 'Running...' : 'Run Offline Accuracy Check'}
-        </button>
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <button className="btn" onClick={downloadReport} style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
+            Download Full Report (CSV)
+          </button>
+          <button className="btn btn-primary" onClick={runBenchmark} disabled={loading}>
+            {loading ? 'Running...' : 'Run Offline Accuracy Check'}
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '2rem' }}>

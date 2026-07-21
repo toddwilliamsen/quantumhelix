@@ -1,7 +1,7 @@
 import React from 'react';
 import { Cloud, Activity, CheckCircle2, AlertTriangle } from 'lucide-react';
 
-const CMDBWidget = ({ selectedIdentity, cmdbData, selectedLatestAlert, getSeverityColor, getSeverityLabel, handleCutOff, phases }) => {
+const CMDBWidget = ({ selectedIdentity, cmdbData, getSeverityColor, getSeverityLabel, handleCutOff, phases, onSelectAlert }) => {
   if (!selectedIdentity) return null;
 
   return (
@@ -91,76 +91,52 @@ const CMDBWidget = ({ selectedIdentity, cmdbData, selectedLatestAlert, getSeveri
           </>
         )}
 
-        {selectedLatestAlert && (
+        {selectedIdentity.alerts && selectedIdentity.alerts.length > 0 && (
           <>
-            <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '1rem', letterSpacing: '0.05em' }}>Quantum Context</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.5rem' }}>
-              <div style={{ background: 'var(--bg-primary)', padding: '0.75rem', borderRadius: '6px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Quantum Kernel SVM</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedLatestAlert.quantum_kernel.toFixed(3)}</div>
-              </div>
-              <div style={{ background: 'var(--bg-primary)', padding: '0.75rem', borderRadius: '6px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Classical SVM</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedLatestAlert.classical_svm.toFixed(3)}</div>
-              </div>
-              <div style={{ background: 'var(--bg-primary)', padding: '0.75rem', borderRadius: '6px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Isolation Forest</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedLatestAlert.isolation_forest.toFixed(3)}</div>
-              </div>
-              <div style={{ background: 'var(--bg-primary)', padding: '0.75rem', borderRadius: '6px', border: `1px solid ${getSeverityColor(selectedLatestAlert.ensemble)}` }}>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Ensemble Score</div>
-                <div style={{ fontSize: '1.1rem', fontWeight: 600, color: getSeverityColor(selectedLatestAlert.ensemble) }}>{selectedLatestAlert.ensemble.toFixed(3)}</div>
-              </div>
-            </div>
-
-            {selectedLatestAlert.disagreement && (
-              <div style={{ background: '#fef3c7', border: '1px solid #fbbf24', padding: '0.75rem', borderRadius: '6px', fontSize: '0.8rem', color: '#b45309', marginBottom: '1.5rem', display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-                <span>{selectedLatestAlert.disagreement}</span>
-              </div>
-            )}
-
-            {selectedLatestAlert.feature_contributions && (
-              <>
-                <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '1rem', letterSpacing: '0.05em' }}>Anomaly Context (Feature Contributions)</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'var(--bg-primary)', borderRadius: '4px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>API Velocity</span>
-                    <span style={{ fontWeight: 600 }}>{selectedLatestAlert.feature_contributions.api_velocity.toFixed(1)} req/s</span>
+            <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '1rem', letterSpacing: '0.05em' }}>Alert Timeline</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              {selectedIdentity.alerts.map((alert) => (
+                <div 
+                  key={alert.id}
+                  onClick={() => onSelectAlert(alert)}
+                  style={{
+                    background: 'var(--bg-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    padding: '1rem',
+                    cursor: 'pointer',
+                    transition: 'transform 0.1s ease, box-shadow 0.1s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+                    e.currentTarget.style.borderColor = getSeverityColor(alert.score);
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'none';
+                    e.currentTarget.style.boxShadow = 'none';
+                    e.currentTarget.style.borderColor = 'var(--border-color)';
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', background: getSeverityColor(alert.score) + '22', color: getSeverityColor(alert.score), padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 600 }}>
+                      Score: {alert.score.toFixed(3)}
+                    </span>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'var(--bg-primary)', borderRadius: '4px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Auth Failures</span>
-                    <span style={{ fontWeight: 600 }}>{selectedLatestAlert.feature_contributions.auth_failures.toFixed(1)}</span>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
+                    {alert.attack_phase} Detected
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', background: 'var(--bg-primary)', borderRadius: '4px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Data Volume</span>
-                    <span style={{ fontWeight: 600 }}>{(selectedLatestAlert.feature_contributions.data_volume_bytes / 1e6).toFixed(2)} MB</span>
-                  </div>
+                  {alert.disagreement && (
+                    <div style={{ fontSize: '0.75rem', color: '#b45309', display: 'flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.5rem' }}>
+                      <AlertTriangle size={12} /> Model Disagreement
+                    </div>
+                  )}
                 </div>
-              </>
-            )}
-
-            {selectedLatestAlert.auto_response && (
-              <div style={{ background: '#ecfdf5', border: '1px solid #10b981', padding: '0.75rem', borderRadius: '6px', fontSize: '0.8rem', color: '#065f46', marginBottom: '1.5rem', display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                <Activity size={16} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-                <div style={{ flex: 1 }}>
-                  <strong>Automated Policy Response Triggered:</strong><br/>
-                  {selectedLatestAlert.auto_response}
-                </div>
-                {selectedLatestAlert.itsm_ticket && (
-                  <div style={{ background: '#065f46', color: 'white', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600 }}>
-                    {selectedLatestAlert.itsm_ticket}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '1rem', letterSpacing: '0.05em' }}>Recommended Actions</h3>
-            <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.85rem', color: 'var(--text-primary)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {selectedLatestAlert.actions.map((act, i) => (
-                <li key={i}>{act}</li>
               ))}
-            </ul>
+            </div>
           </>
         )}
       </div>

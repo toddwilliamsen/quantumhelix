@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import { Play } from 'lucide-react';
 import CMDBWidget from '../components/CMDBWidget';
 import ThreatGraph from '../components/ThreatGraph';
+import EventDrillDownModal from '../components/EventDrillDownModal';
 
 const ThreatMap = ({ token }) => {
   const [alerts, setAlerts] = useState([]);
@@ -10,6 +11,7 @@ const ThreatMap = ({ token }) => {
   const [error, setError] = useState(null);
   const [selectedIdentityId, setSelectedIdentityId] = useState(null);
   const [cmdbData, setCmdbData] = useState(null);
+  const [selectedAlert, setSelectedAlert] = useState(null);
 
   const fetchAlerts = async () => {
     try {
@@ -72,6 +74,17 @@ const ThreatMap = ({ token }) => {
     } catch (e) {
       toast.error('Error contacting server.');
     }
+  };
+
+  const handleAlertAction = async (alertId, actionStr) => {
+    const res = await fetch(`/api/alert/${alertId}/action?action=${actionStr}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!res.ok) throw new Error('Failed');
+    fetchAlerts();
   };
 
   const identities = useMemo(() => {
@@ -184,8 +197,16 @@ const ThreatMap = ({ token }) => {
           getSeverityLabel={getSeverityLabel}
           handleCutOff={handleCutOff}
           phases={phases}
+          onSelectAlert={(alert) => setSelectedAlert(alert)}
         />
       </div>
+
+      <EventDrillDownModal 
+        alert={selectedAlert}
+        onClose={() => setSelectedAlert(null)}
+        onAction={handleAlertAction}
+        getSeverityColor={getSeverityColor}
+      />
     </div>
   );
 };
