@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import { Play } from 'lucide-react';
 import CMDBWidget from '../components/CMDBWidget';
 import ThreatGraph from '../components/ThreatGraph';
+import ThreatGraph3D from '../components/ThreatGraph3D';
 import EventDrillDownModal from '../components/EventDrillDownModal';
 
 const ThreatMap = ({ token }) => {
@@ -12,6 +13,7 @@ const ThreatMap = ({ token }) => {
   const [selectedIdentityId, setSelectedIdentityId] = useState(null);
   const [cmdbData, setCmdbData] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const [viewMode, setViewMode] = useState('kanban'); // 'kanban' or '3d'
 
   const fetchAlerts = async () => {
     try {
@@ -160,34 +162,61 @@ const ThreatMap = ({ token }) => {
   return (
     <div className="page-container" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '0' }}>
       <header className="page-header" style={{ padding: '1.5rem 1.5rem 0 1.5rem', marginBottom: '1rem' }}>
-        <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0 }}>Predictive Threat Map (Kill Chain)</h1>
-          <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)' }}>
-            Track identities as they move through MITRE ATT&CK phases. Cut off access before they reach Exfiltration.
-          </p>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h1 style={{ margin: 0 }}>Predictive Threat Map (Kill Chain)</h1>
+            <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)' }}>
+              Track identities as they move through MITRE ATT&CK phases. Cut off access before they reach Exfiltration.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', background: 'var(--bg-secondary)', borderRadius: '4px', padding: '0.25rem' }}>
+              <button 
+                onClick={() => setViewMode('kanban')} 
+                style={{ padding: '0.5rem 1rem', background: viewMode === 'kanban' ? 'var(--bg-primary)' : 'transparent', color: viewMode === 'kanban' ? 'var(--text-primary)' : 'var(--text-secondary)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: viewMode === 'kanban' ? 600 : 400 }}
+              >
+                Kanban
+              </button>
+              <button 
+                onClick={() => setViewMode('3d')} 
+                style={{ padding: '0.5rem 1rem', background: viewMode === '3d' ? 'var(--bg-primary)' : 'transparent', color: viewMode === '3d' ? 'var(--text-primary)' : 'var(--text-secondary)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: viewMode === '3d' ? 600 : 400 }}
+              >
+                3D WebGL
+              </button>
+            </div>
+            <button 
+              className="btn btn-primary" 
+              onClick={async () => {
+                const res = await fetch('/api/replay_attack', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }});
+                if (res.ok) {
+                  toast.success("Synthetic attack injected!", { icon: '💉' });
+                }
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <Play size={16} /> Replay Synthetic Attack
+            </button>
+          </div>
         </div>
-        <button 
-          className="btn btn-primary" 
-          onClick={async () => {
-            const res = await fetch('/api/replay_attack', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }});
-            if (res.ok) {
-              toast.success("Synthetic attack injected!", { icon: '💉' });
-            }
-          }}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-        >
-          <Play size={16} /> Replay Synthetic Attack
-        </button>
       </header>
       
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <ThreatGraph 
-          phases={phases}
-          identities={identities}
-          selectedIdentityId={selectedIdentityId}
-          setSelectedIdentityId={setSelectedIdentityId}
-          getSeverityColor={getSeverityColor}
-        />
+        {viewMode === 'kanban' ? (
+          <ThreatGraph 
+            phases={phases}
+            identities={identities}
+            selectedIdentityId={selectedIdentityId}
+            setSelectedIdentityId={setSelectedIdentityId}
+            getSeverityColor={getSeverityColor}
+          />
+        ) : (
+          <ThreatGraph3D 
+            alerts={alerts}
+            selectedIdentityId={selectedIdentityId}
+            setSelectedIdentityId={setSelectedIdentityId}
+            getSeverityColor={getSeverityColor}
+          />
+        )}
 
         <CMDBWidget 
           selectedIdentity={selectedIdentity}
