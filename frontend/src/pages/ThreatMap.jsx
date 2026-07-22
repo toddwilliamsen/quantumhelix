@@ -4,6 +4,7 @@ import { Play } from 'lucide-react';
 import CMDBWidget from '../components/CMDBWidget';
 import ThreatGraph from '../components/ThreatGraph';
 import ThreatGraph3D from '../components/ThreatGraph3D';
+import ThreatGraphGlobe from '../components/ThreatGraphGlobe';
 import EventDrillDownModal from '../components/EventDrillDownModal';
 
 const ThreatMap = ({ token }) => {
@@ -181,7 +182,13 @@ const ThreatMap = ({ token }) => {
                 onClick={() => setViewMode('3d')} 
                 style={{ padding: '0.5rem 1rem', background: viewMode === '3d' ? 'var(--bg-primary)' : 'transparent', color: viewMode === '3d' ? 'var(--text-primary)' : 'var(--text-secondary)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: viewMode === '3d' ? 600 : 400 }}
               >
-                3D WebGL
+                3D Network
+              </button>
+              <button 
+                onClick={() => setViewMode('globe')} 
+                style={{ padding: '0.5rem 1rem', background: viewMode === 'globe' ? 'var(--bg-primary)' : 'transparent', color: viewMode === 'globe' ? 'var(--text-primary)' : 'var(--text-secondary)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: viewMode === 'globe' ? 600 : 400 }}
+              >
+                3D Globe
               </button>
             </div>
             <button 
@@ -209,8 +216,15 @@ const ThreatMap = ({ token }) => {
             setSelectedIdentityId={setSelectedIdentityId}
             getSeverityColor={getSeverityColor}
           />
-        ) : (
+        ) : viewMode === '3d' ? (
           <ThreatGraph3D 
+            alerts={alerts}
+            selectedIdentityId={selectedIdentityId}
+            setSelectedIdentityId={setSelectedIdentityId}
+            getSeverityColor={getSeverityColor}
+          />
+        ) : (
+          <ThreatGraphGlobe 
             alerts={alerts}
             selectedIdentityId={selectedIdentityId}
             setSelectedIdentityId={setSelectedIdentityId}
