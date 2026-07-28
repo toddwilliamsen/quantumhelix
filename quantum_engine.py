@@ -23,23 +23,8 @@ N_LAYERS = 3
 FeatureArray = Union[np.ndarray, Sequence[float]]
 
 
-# Local statevector simulator — swap device string for hardware backends later.
-dev = qml.device("default.qubit", wires=N_QUBITS)
-
-
-@qml.qnode(dev)
-def quantum_anomaly_circuit(features: FeatureArray, weights: np.ndarray) -> List[float]:
-    """
-    Parameterized Quantum Circuit for multi-cloud anomaly scoring.
-
-    1. AngleEmbedding maps the 4 PCA components onto 4 qubits (RX rotations).
-    2. StronglyEntanglingLayers applies trainable entangling unitaries.
-    3. Returns PauliZ expectation values for all four qubits.
-    """
-    qml.AngleEmbedding(features, wires=range(N_QUBITS), rotation="X")
-    qml.StronglyEntanglingLayers(weights, wires=range(N_QUBITS))
-    return [qml.expval(qml.PauliZ(i)) for i in range(N_QUBITS)]
-
+# We remove the global device and qnode because we need them to be instantiated
+# per-detector to support dynamic noise probabilities.
 
 def _normalize_threat_score(expectation_values: Sequence[float]):
     """
@@ -73,6 +58,7 @@ class QuantumThreatDetector:
         n_wires: int = N_QUBITS,
         seed: int = 42,
         backend: str = "simulator",
+        noise_prob: float = 0.0,
     ) -> None:
         if n_wires != N_QUBITS:
             raise ValueError(f"n_wires must be {N_QUBITS} to match AngleEmbedding width")
@@ -103,6 +89,28 @@ class QuantumThreatDetector:
                 "backend='qpu' selected — hardware paths (AWS Braket / Azure Quantum) "
                 "are placeholders; inference continues on default.qubit simulator."
             )
+            
+        self.noise_prob = noise_prob
+        self._setup_circuit()
+
+    def _setup_circuit(self):
+        if self.noise_prob > 0.0:
+            dev = qml.device("default.mixed", wires=self.n_wires)
+        else:
+            dev = qml.device("default.qubit", wires=self.n_wires)
+            
+        @qml.qnode(dev)
+        def quantum_anomaly_circuit(features, weights):
+            qml.AngleEmbedding(features, wires=range(self.n_wires), rotation="X")
+            qml.StronglyEntanglingLayers(weights, wires=range(self.n_wires))
+            
+            if self.noise_prob > 0.0:
+                for w in range(self.n_wires):
+                    qml.DepolarizingChannel(self.noise_prob, wires=w)
+                    
+            return [qml.expval(qml.PauliZ(i)) for i in range(self.n_wires)]
+            
+        self.circuit = quantum_anomaly_circuit
 
     def predict_expectations(self, features: FeatureArray) -> np.ndarray:
         """Run the QNode and return raw PauliZ expectation values."""
@@ -113,7 +121,7 @@ class QuantumThreatDetector:
             )
         # Bound angles into a stable embedding range.
         features_arr = np.clip(features_arr, -np.pi, np.pi)
-        expectations = quantum_anomaly_circuit(features_arr, self.weights)
+        expectations = self.circuit(features_arr, self.weights)
         return np.asarray(expectations, dtype=np.float64)
 
     def score(self, features: FeatureArray) -> float:
@@ -189,7 +197,7 @@ class QuantumThreatDetector:
         def cost(weights: np.ndarray):
             loss = 0.0
             for row, target in zip(feature_rows, target_rows):
-                expectations = quantum_anomaly_circuit(row, weights)
+                expectations = self.circuit(row, weights)
                 prediction = _normalize_threat_score(expectations)
                 loss = loss + (prediction - target) ** 2
             return loss / float(n_samples)

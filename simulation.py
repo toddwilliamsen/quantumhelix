@@ -4,7 +4,7 @@ import uuid
 import logging
 import threading
 from typing import Any, List
-from models import db, HistoryEvent, SuppressionRule, Alert
+from models import db, HistoryEvent, SuppressionRule, Alert, PlaybookRule, AuditLog
 from state import state
 from alerter import AlertOrchestrator
 from apt_corpus import build_benchmark_corpus, make_loud_attacks, make_subtle_apt_events
@@ -126,7 +126,7 @@ def event_generator_loop(app):
                     state.processed += 1
                     processed_val = state.processed
                 
-                hist_record = HistoryEvent(
+                hist_record = HistoryEvent(tenant_id=1, 
                     t=processed_val,
                     ensemble=score,
                     isolation_forest=float(detail.isolation_forest),
@@ -152,7 +152,7 @@ def event_generator_loop(app):
                         state.disagreements += 1
 
                 if score >= state.threshold:
-                    rules = SuppressionRule.query.all()
+                    rules = SuppressionRule.query.filter_by(tenant_id=1).all()
                     is_suppressed = False
                     for rule in rules:
                         if rule.rule_type == 'identity' and rule.value.lower() in event.normalized_identity.lower():
@@ -177,9 +177,19 @@ def event_generator_loop(app):
                         elif event.api_velocity > 40.0:
                             phase = "Discovery"
                         
-                        alert_record = Alert(
-                            id=alert_id,
-                            status="open",
+                        
+                        # Correlation Engine
+                        existing_alert = Alert.query.filter_by(tenant_id=1, status='open', identity=event.normalized_identity).first()
+                        if existing_alert:
+                            # Append to existing alert (deduplication)
+                            existing_alert.score = min(0.99, existing_alert.score + 0.05)
+                            existing_alert.actions.append(f"Repeated anomalous behavior detected from {event.source_ip}")
+                            alert_id = existing_alert.id
+                        else:
+                            alert_record = Alert(
+                                id=alert_id,
+                                tenant_id=1,
+                                status="open",
                             severity=sev,
                             cloud=event.cloud_provider,
                             identity=event.normalized_identity,
@@ -213,6 +223,39 @@ def event_generator_loop(app):
                             latency_ms=latency_ms,
                             auto_response="Auto-isolated identity due to high ensemble score (>0.90)" if score > 0.90 else None
                         )
+
+                        
+                        # Evaluate SOAR Playbooks
+                        playbooks = PlaybookRule.query.filter_by(tenant_id=1).all()
+                        for pb in playbooks:
+                            match = False
+                            val = getattr(alert_record, pb.condition_field, None)
+                            if val is not None:
+                                try:
+                                    # Convert to float for numerical comparison if possible
+                                    val_f = float(val)
+                                    cond_f = float(pb.condition_value)
+                                    if pb.condition_operator == '>': match = val_f > cond_f
+                                    elif pb.condition_operator == '<': match = val_f < cond_f
+                                    elif pb.condition_operator == '==': match = val_f == cond_f
+                                except:
+                                    # String comparison
+                                    if pb.condition_operator == '==': match = str(val).lower() == pb.condition_value.lower()
+                            
+                            if match:
+                                if pb.action == 'auto_isolate':
+                                    alert_record.status = 'escalated'
+                                    alert_record.auto_response = f"SOAR Playbook executed: auto-isolated identity."
+                                    if not SuppressionRule.query.filter_by(rule_type='identity', value=alert_record.identity).first():
+                                        rule = SuppressionRule(tenant_id=1, rule_type='identity', value=alert_record.identity)
+                                        db.session.add(rule)
+                                    audit = AuditLog(tenant_id=1, username="SOAR_BOT", action="Playbook Execution: Auto Isolate", target=alert_record.identity)
+                                    db.session.add(audit)
+                                elif pb.action == 'create_ticket':
+                                    if not alert_record.itsm_ticket:
+                                        alert_record.itsm_ticket = "SOAR-" + str(10000 + random.randint(1, 9999))
+                                    audit = AuditLog(tenant_id=1, username="SOAR_BOT", action="Playbook Execution: Create Ticket", target=alert_record.id)
+                                    db.session.add(audit)
 
                         if score > 0.90:
                             cmdb_context = enrich_identity(event.normalized_identity)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Inbox, BarChart2, Play, Pause, Trash2, Activity, LogOut, Settings as SettingsIcon, Moon, Sun, Map, Zap } from 'lucide-react';
+import { LayoutDashboard, Inbox, BarChart2, Play, Pause, Trash2, Activity, LogOut, Settings as SettingsIcon, Moon, Sun, Map, Zap, Briefcase } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
 import Dashboard from './pages/Dashboard';
 import TriageInbox from './pages/TriageInbox';
@@ -9,6 +9,7 @@ import Settings from './pages/Settings';
 import Login from './pages/Login';
 import ThreatMap from './pages/ThreatMap';
 import Playground from './pages/Playground';
+import Cases from './pages/Cases';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('quantum_token'));
@@ -147,20 +148,23 @@ function App() {
           <NavLink to="/analytics" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <BarChart2 size={20} /> Analytics & Models
           </NavLink>
+                    <NavLink to="/cases" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <Briefcase size={20} /> Case Management
+          </NavLink>
           <NavLink to="/threat-map" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Map size={20} /> Threat Map
           </NavLink>
           <NavLink to="/playground" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Zap size={20} /> Model Playground
           </NavLink>
-          {role === 'admin' && (
+          {role === 'SUPER_ADMIN' || role === 'TENANT_ADMIN' && (
             <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
               <SettingsIcon size={20} /> Settings & Rules
             </NavLink>
           )}
         </nav>
 
-        {role === 'admin' && (
+        {role === 'SUPER_ADMIN' || role === 'TENANT_ADMIN' && (
           <div className="controls-section" style={{ marginTop: 'auto' }}>
             <div className="control-group">
               <span className="control-label">Alert Sensitivity ({localThreshold.toFixed(2)})</span>
@@ -207,6 +211,7 @@ function App() {
           <Route path="/" element={<Dashboard state={state} />} />
           <Route path="/triage" element={<TriageInbox state={state} token={token} />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/cases" element={<Cases token={token} />} />
           <Route path="/threat-map" element={<ThreatMap token={token} />} />
           <Route path="/playground" element={<Playground token={token} />} />
           <Route path="/settings" element={<Settings token={token} />} />

@@ -33,8 +33,15 @@ def serve_react(path):
 
 with app.app_context():
     db.create_all()
+    from models import Tenant
+    default_tenant = Tenant.query.filter_by(name='Default Tenant').first()
+    if not default_tenant:
+        default_tenant = Tenant(name='Default Tenant', compliance_mode_enabled=False)
+        db.session.add(default_tenant)
+        db.session.commit()
+        
     if not User.query.filter_by(username='admin').first():
-        admin = User(username='admin', role='admin')
+        admin = User(username='admin', role='SUPER_ADMIN', tenant_id=default_tenant.id)
         admin_pass = os.environ.get('ADMIN_PASSWORD', 'quantum123')
         admin.set_password(admin_pass)
         db.session.add(admin)

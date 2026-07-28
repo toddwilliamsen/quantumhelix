@@ -4,12 +4,19 @@ import datetime
 
 db = SQLAlchemy()
 
+class Tenant(db.Model):
+    __tablename__ = 'tenants'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    compliance_mode_enabled = db.Column(db.Boolean, default=False)
+
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
-    role = db.Column(db.String(20), nullable=False, default='analyst') # 'admin' or 'analyst'
+    role = db.Column(db.String(20), nullable=False, default='TIER_1') # SUPER_ADMIN, TENANT_ADMIN, TIER_1, TIER_2, READ_ONLY
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -17,9 +24,55 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+class UserSecurity(db.Model):
+    __tablename__ = 'user_security'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
+    totp_secret = db.Column(db.String(32), nullable=True)
+    mfa_enabled = db.Column(db.Boolean, default=False)
+    webauthn_enabled = db.Column(db.Boolean, default=False)
+    
+class WebAuthnCredential(db.Model):
+    __tablename__ = 'webauthn_credentials'
+    id = db.Column(db.String(255), primary_key=True) # credential ID
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    public_key = db.Column(db.LargeBinary, nullable=False)
+    sign_count = db.Column(db.Integer, default=0)
+    transports = db.Column(db.JSON, nullable=True)
+
+class IncidentCase(db.Model):
+    __tablename__ = 'incident_cases'
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Open') # Open, Pending, Resolved
+    assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    priority = db.Column(db.String(20), nullable=False, default='Medium')
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "title": self.title,
+            "status": self.status,
+            "assignee_id": self.assignee_id,
+            "priority": self.priority,
+            "created_at": self.created_at.isoformat() + "Z"
+        }
+
+class CaseComment(db.Model):
+    __tablename__ = 'case_comments'
+    id = db.Column(db.Integer, primary_key=True)
+    case_id = db.Column(db.Integer, db.ForeignKey('incident_cases.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
 class HistoryEvent(db.Model):
     __tablename__ = 'history_events'
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
     t = db.Column(db.Integer, nullable=False, index=True)
     ensemble = db.Column(db.Float, nullable=False)
     isolation_forest = db.Column(db.Float, nullable=False)
@@ -33,6 +86,8 @@ class HistoryEvent(db.Model):
 class Alert(db.Model):
     __tablename__ = 'alerts'
     id = db.Column(db.String(36), primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
+    case_id = db.Column(db.Integer, db.ForeignKey('incident_cases.id'), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='open', index=True) # open, acknowledged, false_positive, escalated
     severity = db.Column(db.String(20), nullable=False)
     cloud = db.Column(db.String(50), nullable=False)
@@ -50,18 +105,17 @@ class Alert(db.Model):
     attack_phase = db.Column(db.String(50), nullable=True) # Initial Access, Discovery, Credential Access, Exfiltration
     siem = db.Column(db.JSON, nullable=False)
     itsm_ticket = db.Column(db.String(50), nullable=True)
-    
-    # New Fields for 2.0 Feature Expansion
     feature_contributions = db.Column(db.JSON, nullable=True)
     linked_identities = db.Column(db.JSON, nullable=True)
     latency_ms = db.Column(db.Float, nullable=True, default=0.0)
     auto_response = db.Column(db.String(200), nullable=True)
-    
     timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow, index=True)
 
     def to_dict(self):
         return {
             "id": self.id,
+            "tenant_id": self.tenant_id,
+            "case_id": self.case_id,
             "status": self.status,
             "severity": self.severity,
             "cloud": self.cloud,
@@ -89,6 +143,7 @@ class Alert(db.Model):
 class SuppressionRule(db.Model):
     __tablename__ = 'suppression_rules'
     id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
     rule_type = db.Column(db.String(50), nullable=False) # 'identity', 'ip', 'cloud'
     value = db.Column(db.String(200), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
@@ -96,7 +151,48 @@ class SuppressionRule(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "tenant_id": self.tenant_id,
             "rule_type": self.rule_type,
             "value": self.value,
             "created_at": self.created_at.isoformat() + "Z"
+        }
+
+class PlaybookRule(db.Model):
+    __tablename__ = 'playbook_rules'
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
+    condition_field = db.Column(db.String(50), nullable=False) # 'score', 'attack_phase', 'severity'
+    condition_operator = db.Column(db.String(10), nullable=False) # '>', '==', '<'
+    condition_value = db.Column(db.String(100), nullable=False)
+    action = db.Column(db.String(50), nullable=False) # 'auto_isolate', 'create_ticket'
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "condition_field": self.condition_field,
+            "condition_operator": self.condition_operator,
+            "condition_value": self.condition_value,
+            "action": self.action,
+            "created_at": self.created_at.isoformat() + "Z"
+        }
+
+class AuditLog(db.Model):
+    __tablename__ = 'audit_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
+    username = db.Column(db.String(80), nullable=False)
+    action = db.Column(db.String(255), nullable=False)
+    target = db.Column(db.String(255), nullable=True)
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tenant_id": self.tenant_id,
+            "username": self.username,
+            "action": self.action,
+            "target": self.target,
+            "timestamp": self.timestamp.isoformat() + "Z"
         }

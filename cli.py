@@ -33,6 +33,8 @@ ENGINE_CHOICES = [
     "classical_svm",
     "isolation_forest",
     "qnn",
+    "autoencoder",
+    "swaptest",
 ]
 
 
@@ -66,6 +68,8 @@ def _bootstrap_scorer(
     warmup_events: int,
     backend: str,
     seed: int,
+    encoding: str = "angle",
+    noise_prob: float = 0.0,
 ) -> Tuple[ClassicalFeaturePipeline, Any]:
     """Fit PCA + selected threat engine."""
     # Richer warmup: mock stream + loud/subtle corpus for supervised engines.
@@ -86,7 +90,7 @@ def _bootstrap_scorer(
         scorer = HybridThreatEnsemble(seed=seed, include_qnn=False, qnn_backend=backend)
         scorer.fit(reduced, labels)
     elif engine == "quantum_kernel":
-        scorer = QuantumKernelSVMDetector(seed=seed)
+        scorer = QuantumKernelSVMDetector(seed=seed, encoding=encoding, noise_prob=noise_prob)
         scorer.fit(reduced, labels)
     elif engine == "classical_svm":
         scorer = ClassicalSVMDetector(seed=seed)
@@ -95,9 +99,19 @@ def _bootstrap_scorer(
         scorer = IsolationForestDetector(seed=seed)
         scorer.fit(reduced, labels)
     elif engine == "qnn":
-        scorer = QuantumThreatDetector(backend=backend, seed=seed)
+        scorer = QuantumThreatDetector(backend=backend, seed=seed, noise_prob=noise_prob)
         if float(np.sum(labels)) >= 1.0:
             scorer.train_on_batch(reduced, labels, steps=12, step_size=0.08)
+    elif engine == "autoencoder":
+        from quantum_advanced import QuantumAutoencoderDetector
+        scorer = QuantumAutoencoderDetector(seed=seed)
+        normal_data = reduced[labels == 0.0]
+        if len(normal_data) > 0:
+            scorer.train_on_batch(normal_data, steps=12, step_size=0.08)
+    elif engine == "swaptest":
+        from quantum_advanced import SwapTestAnomalyDetector
+        scorer = SwapTestAnomalyDetector()
+        scorer.fit(reduced, labels)
     else:
         raise click.ClickException(f"Unknown engine: {engine}")
 
@@ -186,6 +200,20 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     type=click.IntRange(1, 100),
     help="Mock telemetry ingest rate.",
 )
+@click.option(
+    "--encoding",
+    type=click.Choice(["angle", "iqp", "amplitude"], case_sensitive=False),
+    default="angle",
+    show_default=True,
+    help="Quantum data encoding strategy (used by quantum_kernel).",
+)
+@click.option(
+    "--noise-prob",
+    default=0.0,
+    show_default=True,
+    type=click.FloatRange(0.0, 1.0),
+    help="Depolarizing noise probability to test local robustness.",
+)
 @click.pass_context
 def scan(
     ctx: click.Context,
@@ -195,6 +223,8 @@ def scan(
     backend: str,
     warmup: int,
     events_per_second: int,
+    encoding: str,
+    noise_prob: float,
 ) -> None:
     """
     Stream mock multi-cloud logs through PCA + the selected threat engine,
@@ -218,6 +248,8 @@ def scan(
         warmup_events=warmup,
         backend=backend,
         seed=42,
+        encoding=encoding,
+        noise_prob=noise_prob,
     )
     alerter = AlertOrchestrator(threshold=threshold, dry_run_webhook=True)
 

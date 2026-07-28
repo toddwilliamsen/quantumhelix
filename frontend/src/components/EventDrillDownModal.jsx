@@ -1,9 +1,42 @@
-import React from 'react';
-import { X, Activity, Shield, Code, Server, AlertTriangle, Play } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Activity, Shield, Code, Server, AlertTriangle, Play, Sparkles, Globe } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 const EventDrillDownModal = ({ alert, onClose, onAction, getSeverityColor }) => {
+  const [aiInsight, setAiInsight] = useState(null);
+  const [loadingAi, setLoadingAi] = useState(false);
+  const [osintData, setOsintData] = useState(null);
+  const [loadingOsint, setLoadingOsint] = useState(false);
+  
   if (!alert) return null;
+  const token = localStorage.getItem('quantum_token');
+  const role = localStorage.getItem('quantum_role');
+
+  const fetchAiInsight = async () => {
+    setLoadingAi(true);
+    try {
+      const res = await fetch('/api/ai-insight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ alert_id: alert.id })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAiInsight(data.insight);
+      } else toast.error('AI Insight failed');
+    } catch(e) { toast.error('Error fetching AI insight'); }
+    finally { setLoadingAi(false); }
+  };
+
+  const fetchOsint = async () => {
+    setLoadingOsint(true);
+    try {
+      const res = await fetch(`/api/osint/${alert.source_ip}`, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (res.ok) setOsintData(await res.json());
+      else toast.error('OSINT lookup failed');
+    } catch(e) { toast.error('Error fetching OSINT'); }
+    finally { setLoadingOsint(false); }
+  };
 
   const handleAction = async (actionStr) => {
     try {
@@ -105,12 +138,50 @@ const EventDrillDownModal = ({ alert, onClose, onAction, getSeverityColor }) => 
             </div>
 
             <div>
-              <h3 style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '1rem' }}>Anomaly Context</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3 style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', textTransform: 'uppercase', margin: 0 }}>Anomaly Context</h3>
+                <button onClick={fetchAiInsight} disabled={loadingAi || aiInsight} className="btn btn-secondary" style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem', color: '#8b5cf6', borderColor: '#8b5cf655' }}>
+                  <Sparkles size={14} /> {loadingAi ? 'Analyzing...' : 'Generate AI Insight'}
+                </button>
+              </div>
+              
+              {aiInsight && (
+                <div style={{ padding: '1rem', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: '8px', marginBottom: '1rem', color: '#5b21b6', fontSize: '0.85rem', lineHeight: '1.5' }} dangerouslySetInnerHTML={{__html: aiInsight.replace(/\\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/`(.*?)`/g, '<code style="background: #ede9fe; padding: 2px 4px; border-radius: 4px;">$1</code>')}} />
+              )}
+              
               <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>{alert.plain_english}</p>
               
               <ul style={{ margin: '1rem 0 0 0', paddingLeft: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {alert.actions.map((act, i) => <li key={i}>{act}</li>)}
               </ul>
+            </div>
+            
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3 style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', textTransform: 'uppercase', margin: 0 }}>Source OSINT</h3>
+                <button onClick={fetchOsint} disabled={loadingOsint || osintData} className="btn btn-secondary" style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                  <Globe size={14} /> {loadingOsint ? 'Lookup...' : 'Check Threat Intel'}
+                </button>
+              </div>
+              
+              {osintData && (
+                <div style={{ padding: '1rem', background: 'var(--bg-primary)', borderRadius: '8px', border: `1px solid ${osintData.vendors_flagged > 0 ? '#ef4444' : 'var(--border-color)'}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <strong>{osintData.ip}</strong>
+                    <span style={{ color: osintData.vendors_flagged > 0 ? '#ef4444' : 'var(--success)', fontWeight: 'bold' }}>{osintData.reputation}</span>
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                    Flagged by {osintData.vendors_flagged} / {osintData.total_vendors} security vendors
+                  </div>
+                  {osintData.tags.length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      {osintData.tags.map(t => (
+                        <span key={t} style={{ background: '#ef444422', color: '#ef4444', padding: '0.1rem 0.4rem', borderRadius: '4px', fontSize: '0.75rem' }}>{t}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -138,6 +209,7 @@ const EventDrillDownModal = ({ alert, onClose, onAction, getSeverityColor }) => 
         </div>
 
         {/* Footer Actions */}
+        {role !== 'READ_ONLY' && (
         <div style={{
           padding: '1.5rem',
           borderTop: '1px solid var(--border-color)',
@@ -156,6 +228,7 @@ const EventDrillDownModal = ({ alert, onClose, onAction, getSeverityColor }) => 
             <Shield size={16} /> Escalate Alert
           </button>
         </div>
+        )}
       </div>
     </div>
   );
