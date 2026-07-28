@@ -13,7 +13,7 @@ What Quantum Helix implements **beyond MVP**, how the engines relate, and how to
 | Quantum Kernel SVM (PennyLane fidelity kernel) | **PoC+ complete** | **Primary quantum path** |
 | Hybrid ensemble blend | **PoC+ complete** | Default CLI scan engine |
 | Variational QNN | **Optional sidecar** | Research / demo — not required for PoC claims |
-| React SOC GUI + Flask API | **PoC+ complete** | Ensemble live charts, engine votes, cloud mix, Evidence Lab, Triage Inbox, Settings |
+| React SOC GUI + Flask API | **Past-PoC harden** | Live dashboard, triage (claim / My queue / escalate→case), cases, threat map, Administration (full user management), My account (password + MFA), multi-tenant RBAC, session revoke, CI pytest |
 | Head-to-head benchmark harness | **PoC+ complete** | Detection rate, FPR, subtle-APT recall, latency, cost proxy |
 | Subtle APT corpus | **PoC+ complete** | Low-and-slow attacks (not only loud outliers) |
 | Live GuardDuty / Defender ingest | Not yet | Next production step |
@@ -115,7 +115,8 @@ Use `benchmark.py` deltas (subtle APT recall Δ, FPR Δ) as the honest scoreboar
 
 ## Related docs
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — updated hybrid design  
+- [ARCHITECTURE.md](ARCHITECTURE.md) — hybrid design and console RBAC  
 - [VALIDATION.md](VALIDATION.md) — loud-attack validation suite  
-- [API_REFERENCE.md](API_REFERENCE.md) — new public classes  
-- [USER_GUIDE.md](USER_GUIDE.md) — operator commands  
+- [API_REFERENCE.md](API_REFERENCE.md) — auth, users, and detection APIs  
+- [USER_GUIDE.md](USER_GUIDE.md) — operator commands and user administration  
+- [OPERATIONS.md](OPERATIONS.md) — bootstrap admin and production checklist  

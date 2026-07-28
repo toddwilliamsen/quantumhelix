@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sliders, Cpu, Activity, Save } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { apiFetch } from '../api';
 
 function Playground({ token }) {
+  const readOnly = localStorage.getItem('quantum_role') === 'READ_ONLY';
   const [config, setConfig] = useState({
     pca_dimensions: 4,
     kernel_type: 'simulator',
@@ -12,123 +14,153 @@ function Playground({ token }) {
     },
     latency_profile: 'balanced'
   });
-
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const data = await apiFetch('/api/playground/config', { token, signal: controller.signal });
+        const classical = data.ensemble_weights?.classical ?? 0.55;
+        const quantum = data.ensemble_weights?.quantum ?? 0.45;
+        setConfig({
+          pca_dimensions: data.pca_dimensions ?? 4,
+          kernel_type: data.kernel_type ?? 'simulator',
+          ensemble_weights: {
+            classical: classical <= 1 ? Math.round(classical * 100) : Math.round(classical),
+            quantum: quantum <= 1 ? Math.round(quantum * 100) : Math.round(quantum),
+          },
+          latency_profile: data.latency_profile ?? 'balanced',
+        });
+      } catch (e) {
+        if (e.name !== 'AbortError') console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [token]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch('/api/playground/config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+      const payload = {
+        ...config,
+        ensemble_weights: {
+          classical: config.ensemble_weights.classical / 100,
+          quantum: config.ensemble_weights.quantum / 100,
         },
-        body: JSON.stringify(config)
+      };
+      await apiFetch('/api/playground/config', {
+        method: 'POST',
+        token,
+        json: payload,
       });
-      if (res.ok) {
-        toast.success("Ensemble configuration updated (Simulated)", { icon: '⚙️' });
-      } else {
-        toast.error("Failed to update configuration.");
-      }
+      toast.success('Model settings updated');
     } catch (e) {
-      toast.error("Error communicating with backend.");
+      toast.error(e.message || "Failed to update configuration.");
     } finally {
       setSaving(false);
     }
   };
 
+  if (loading) {
+    return <div><p style={{ color: 'var(--text-secondary)' }}>Loading model settings…</p></div>;
+  }
+
   return (
-    <div className="dashboard">
-      <header className="header">
-        <h1>Model Playground</h1>
-        <p>Experiment with the hybrid ensemble architecture and tune the threat models in real-time.</p>
+    <div>
+      <header className="page-header">
+        <h1 className="page-title">Model controls</h1>
+        <p className="page-subtitle">Adjust live scoring weights and simulation cadence.</p>
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginTop: '2rem' }}>
+      <div className="model-settings-grid">
         
-        {/* Classical Settings */}
         <div className="card">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', color: 'var(--text-secondary)' }}>
             <Activity size={18} />
-            <h2>Classical Dimensionality Reduction</h2>
+            <h2>Feature pipeline</h2>
           </div>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-            Adjust the number of Principal Components extracted from the normalized Common Information Model before passing to the quantum layer.
+            The normalized event vector is scaled and reduced before model inference.
           </p>
           
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <label style={{ fontWeight: '500' }}>PCA Dimensions (Qubit Width)</label>
-              <span>{config.pca_dimensions} Components</span>
+              <label style={{ fontWeight: 600 }} htmlFor="pca-dims">PCA dimensions</label>
+              <span className="status-pill">4 · fixed</span>
             </div>
             <input 
+              id="pca-dims"
               type="range" 
-              min="2" max="8" step="1" 
-              value={config.pca_dimensions}
-              onChange={(e) => setConfig({...config, pca_dimensions: parseInt(e.target.value)})}
-              style={{ width: '100%' }}
+              min="4" max="4" step="1"
+              value={4}
+              disabled
+              aria-valuetext="4 (locked to quantum AngleEmbedding width)"
+              style={{ width: '100%', opacity: 0.5 }}
             />
             <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>
-              Note: Higher dimensions require exponentially more qubits for AngleEmbedding.
+              Fixed to the four-qubit AngleEmbedding width. A width change requires model retraining.
             </small>
+          </div>
+
+          <div style={{ marginTop: '1.5rem' }}>
+            <label className="control-label" style={{ display: 'block', marginBottom: '0.5rem' }} htmlFor="latency">Simulation cadence</label>
+            <select
+              id="latency"
+              className="form-control"
+              value={config.latency_profile}
+              disabled={readOnly}
+              onChange={(e) => setConfig({ ...config, latency_profile: e.target.value })}
+            >
+              <option value="fast">Fast · 0.25 seconds</option>
+              <option value="balanced">Balanced · 0.65 seconds</option>
+              <option value="thorough">Reduced load · 1.2 seconds</option>
+            </select>
           </div>
         </div>
 
-        {/* Quantum Settings */}
         <div className="card">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', color: 'var(--text-secondary)' }}>
             <Cpu size={18} />
-            <h2>Quantum Hardware Configuration</h2>
+            <h2>Kernel runtime</h2>
           </div>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-            Select the execution backend for the PennyLane QSVM.
+            Runtime used by the quantum-kernel model in this deployment.
           </p>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input 
-                type="radio" 
-                name="kernel" 
-                value="simulator" 
-                checked={config.kernel_type === 'simulator'} 
-                onChange={(e) => setConfig({...config, kernel_type: e.target.value})}
-              />
-              <span><strong>Statevector Simulator</strong> (Lightning.qubit, fast classical simulation)</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input 
-                type="radio" 
-                name="kernel" 
-                value="ibm_quantum" 
-                checked={config.kernel_type === 'ibm_quantum'} 
-                onChange={(e) => setConfig({...config, kernel_type: e.target.value})}
-              />
-              <span><strong>IBM Quantum</strong> (Simulated hardware shot execution)</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: 0.5 }}>
-              <input type="radio" disabled />
-              <span><strong>IonQ Aria</strong> (Offline/Unavailable)</span>
-            </label>
+          <div style={{ padding: '14px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--surface-subtle)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+              <div>
+                <strong>Local statevector simulator</strong>
+                <div style={{ marginTop: 3, color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                  PennyLane default.qubit · four wires
+                </div>
+              </div>
+              <span className="status-pill is-success">Active</span>
+            </div>
           </div>
         </div>
 
-        {/* Ensemble Weighting */}
         <div className="card" style={{ gridColumn: '1 / -1' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', color: 'var(--text-secondary)' }}>
             <Sliders size={18} />
-            <h2>Hybrid Ensemble Weighting</h2>
+            <h2>Ensemble weighting</h2>
           </div>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-            Adjust the confidence weight distributed between the Classical Baseline (Isolation Forest + SVM) and the Quantum Kernel.
+            Set the contribution of the classical baseline and quantum kernel to the final risk score.
           </p>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <span style={{ minWidth: '100px', fontWeight: '500', color: '#3b82f6' }}>Classical ({config.ensemble_weights.classical}%)</span>
+            <span style={{ minWidth: '110px', fontWeight: 600, color: 'var(--primary)' }}>Classical · {config.ensemble_weights.classical}%</span>
             <input 
               type="range" 
               min="0" max="100" step="5" 
               value={config.ensemble_weights.classical}
+              aria-label="Classical ensemble weight"
+              disabled={readOnly}
               onChange={(e) => {
                 const val = parseInt(e.target.value);
                 setConfig({
@@ -138,23 +170,19 @@ function Playground({ token }) {
               }}
               style={{ flex: 1 }}
             />
-            <span style={{ minWidth: '100px', fontWeight: '500', textAlign: 'right', color: '#8b5cf6' }}>Quantum ({config.ensemble_weights.quantum}%)</span>
+            <span style={{ minWidth: '110px', fontWeight: 600, textAlign: 'right', color: 'var(--text-primary)' }}>Quantum · {config.ensemble_weights.quantum}%</span>
           </div>
         </div>
       </div>
 
-      <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Save size={18} /> {saving ? "Applying..." : "Apply Configuration"}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        {readOnly ? (
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Read-only access</span>
+        ) : (
+        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+          <Save size={16} /> {saving ? 'Saving…' : 'Save changes'}
         </button>
-      </div>
-
-      <div className="card" style={{ marginTop: '2rem', background: 'var(--bg-card)', border: '1px solid #10b981', color: '#10b981' }}>
-        <h3 style={{ marginBottom: '0.5rem', color: '#10b981' }}>Future Quantum Hardware Readiness</h3>
-        <p style={{ fontSize: '0.9rem', lineHeight: '1.5' }}>
-          If run on a real Quantum Processing Unit (QPU) rather than a statevector simulator, this kernel architecture would scale differently.
-          The classical complexity of computing kernel entries grows exponentially with feature dimension, whereas a QPU can evaluate the inner product directly via a SWAP test or inversion circuit in O(1) circuit depth, offering a theoretical exponential speedup for high-dimensional threat spaces.
-        </p>
+        )}
       </div>
     </div>
   );

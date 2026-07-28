@@ -118,12 +118,13 @@ class AlertOrchestrator:
                 "Normalized": severity_normalized,
                 "Label": "CRITICAL" if threat_score >= 0.9 else "HIGH",
             },
-            "Title": "Quantum Helix QNN Zero-Day Cloud Anomaly",
+            "Title": "Quantum Helix Hybrid Ensemble Anomaly",
             "Description": (
-                f"Parameterized quantum circuit flagged multi-cloud telemetry for "
-                f"identity '{event.normalized_identity}' from {event.source_ip} with "
-                f"threat score {threat_score:.4f} (threshold {threshold:.2f}). "
-                f"Correlated signals: api_velocity={event.api_velocity:.2f}, "
+                f"Hybrid ensemble (Isolation Forest + classical SVM + quantum kernel SVM) "
+                f"flagged multi-cloud telemetry for identity '{event.normalized_identity}' "
+                f"from {event.source_ip} with threat score {threat_score:.4f} "
+                f"(threshold {threshold:.2f}). Correlated signals: "
+                f"api_velocity={event.api_velocity:.2f}, "
                 f"auth_failures={event.auth_failures:.2f}, "
                 f"data_volume_bytes={event.data_volume_bytes:.0f}."
             ),
@@ -178,8 +179,8 @@ class AlertOrchestrator:
             f"externalId={event.raw_event_id or uuid.uuid4()}"
         )
         cef = (
-            f"CEF:0|Quantum Helix|QMLThreatDetector|1.0.0|"
-            f"QNN-ANOMALY|Quantum Cloud Threat Detected|{severity}|{extension}"
+            f"CEF:0|Quantum Helix|HybridEnsemble|1.0.0|"
+            f"ENSEMBLE-ANOMALY|Hybrid Cloud Threat Detected|{severity}|{extension}"
         )
         return cef
 

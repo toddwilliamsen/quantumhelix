@@ -117,24 +117,26 @@ def run_benchmark(
         n_subtle=n_subtle,
         seed=seed,
     )
-    pipeline = ClassicalFeaturePipeline()
-    features = pipeline.fit_transform(events)
 
+    # Split events BEFORE fitting scaler/PCA to avoid preprocessing leakage.
     (
-        x_train,
-        x_test,
+        events_train,
+        events_test,
         y_train,
         y_test,
         s_train,
         s_test,
     ) = train_test_split(
-        features,
+        events,
         labels,
         subtle_mask,
         test_size=0.35,
         random_state=seed,
         stratify=labels,
     )
+    pipeline = ClassicalFeaturePipeline()
+    x_train = pipeline.fit_transform(list(events_train))
+    x_test = pipeline.transform(list(events_test))
 
     reports: List[EngineReport] = []
 

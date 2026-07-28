@@ -21,7 +21,11 @@ Shared vocabulary for Quantum Helix documentation.
 | **EPS** | Events per second — mock ingest rate in the CLI |
 | **SOC** | Security Operations Center |
 | **SIEM** | Security Information and Event Management platform |
-| **RBAC** | Role-Based Access Control (Azure privilege-related attacks) |
+| **RBAC** | Role-Based Access Control — (1) Azure privilege-related *attacks* in the corpus, and (2) application roles that gate the React console (`SUPER_ADMIN`, `TENANT_ADMIN`, `TIER_1`, `TIER_2`, `READ_ONLY`) |
+| **Tenant** | Isolation boundary for alerts, cases, rules, and audit; users belong to one tenant |
+| **Session JWT** | HS256 bearer token (`type=session`) issued after login / MFA; required for API calls |
+| **MFA** | Multi-factor authentication — TOTP authenticator apps and/or WebAuthn security keys |
+| **Deactivate** | Soft revoke: `users.is_active=false` blocks login and live sessions without deleting history |
 | **Exfiltration** | Unauthorized bulk data egress (high `data_volume_bytes`) |
 | **Credential stuffing** | High-volume auth attempts using stolen credential sets |
 | **Cross-cloud pivoting** | Lateral movement that spans AWS and Azure control/data planes |

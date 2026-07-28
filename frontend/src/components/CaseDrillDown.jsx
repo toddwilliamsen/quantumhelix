@@ -1,115 +1,152 @@
 import React, { useState, useEffect } from 'react';
-import { X, User as UserIcon, MessageSquare, Briefcase, Activity } from 'lucide-react';
+import { X, MessageSquare, Briefcase } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { apiFetch } from '../api';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
-const CaseDrillDown = ({ caseObj, onClose, token }) => {
+const CaseDrillDown = ({ caseObj, onClose, token, readOnly = false }) => {
+  const dialogRef = useFocusTrap(true);
   const [alerts, setAlerts] = useState([]);
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [users, setUsers] = useState([]);
   const [status, setStatus] = useState(caseObj.status);
   const [assignee, setAssignee] = useState(caseObj.assignee_id || '');
+  const [peak, setPeak] = useState(() => { try { return JSON.parse(caseObj.peak_framework || '[]'); } catch { return []; } });
+  const [killChain, setKillChain] = useState(() => { try { return JSON.parse(caseObj.kill_chain || '[]'); } catch { return []; } });
+  const [diamondModel, setDiamondModel] = useState(() => { try { return JSON.parse(caseObj.diamond_model || '[]'); } catch { return []; } });
 
   useEffect(() => {
-    fetchAlerts();
-    fetchComments();
-    fetchUsers();
-  }, []);
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const [a, c, u] = await Promise.all([
+          apiFetch(`/api/cases/${caseObj.id}/alerts`, { token, signal: controller.signal }),
+          apiFetch(`/api/cases/${caseObj.id}/comments`, { token, signal: controller.signal }),
+          apiFetch('/api/users', { token, signal: controller.signal }).catch(() => []),
+        ]);
+        setAlerts(a);
+        setComments(c);
+        setUsers(u);
+      } catch (e) {
+        if (e.name !== 'AbortError') toast.error('Failed to load case details');
+      }
+    };
+    load();
+    return () => controller.abort();
+  }, [caseObj.id, token]);
 
-  const fetchAlerts = async () => {
-    try {
-      const res = await fetch(`/api/cases/${caseObj.id}/alerts`, { headers: { 'Authorization': `Bearer ${token}` } });
-      if (res.ok) setAlerts(await res.json());
-    } catch(e) {}
-  };
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   const fetchComments = async () => {
     try {
-      const res = await fetch(`/api/cases/${caseObj.id}/comments`, { headers: { 'Authorization': `Bearer ${token}` } });
-      if (res.ok) setComments(await res.json());
-    } catch(e) {}
-  };
-
-  const fetchUsers = async () => {
-    try {
-      const res = await fetch('/api/users', { headers: { 'Authorization': `Bearer ${token}` } });
-      if (res.ok) {
-        const u = await res.json();
-        setUsers(u);
-      }
-    } catch(e) {}
+      setComments(await apiFetch(`/api/cases/${caseObj.id}/comments`, { token }));
+    } catch { /* ignore */ }
   };
 
   const addComment = async (e) => {
     e.preventDefault();
     if (!newComment.trim()) return;
     try {
-      const res = await fetch(`/api/cases/${caseObj.id}/comments`, {
+      await apiFetch(`/api/cases/${caseObj.id}/comments`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ content: newComment })
+        token,
+        json: { content: newComment },
       });
-      if (res.ok) {
-        setNewComment('');
-        fetchComments();
-      }
-    } catch(e) {}
+      setNewComment('');
+      fetchComments();
+    } catch {
+      toast.error('Failed to add comment');
+    }
+  };
+
+  const unlinkAlert = async (alertId) => {
+    try {
+      await apiFetch(`/api/cases/${caseObj.id}/alerts/${alertId}`, { method: 'DELETE', token });
+      setAlerts(prev => prev.filter(a => a.id !== alertId));
+      toast.success('Alert unlinked');
+    } catch {
+      toast.error('Failed to unlink alert');
+    }
+  };
+
+  const toggleFramework = (framework, value, setter) => {
+    let newArr = [...framework];
+    if (newArr.includes(value)) newArr = newArr.filter(v => v !== value);
+    else newArr.push(value);
+    setter(newArr);
+    return newArr;
   };
 
   const updateCase = async (payload) => {
     try {
-      const res = await fetch(`/api/cases/${caseObj.id}`, {
+      await apiFetch(`/api/cases/${caseObj.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(payload)
+        token,
+        json: payload,
       });
-      if (res.ok) toast.success("Case updated");
-    } catch(e) {}
+      toast.success("Case updated", { id: `case-update-${caseObj.id}` });
+    } catch {
+      toast.error('Failed to update case');
+    }
   };
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div style={{ background: 'var(--bg-color)', borderRadius: '12px', width: '90%', maxWidth: '1000px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        
-        {/* Header */}
+    <div
+      role="presentation"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="case-dialog-title"
+        style={{ background: 'var(--bg-color)', borderRadius: '12px', width: '90%', maxWidth: '1000px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', outline: 'none' }}
+      >
         <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <h2 style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <h2 id="case-dialog-title" style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Briefcase size={24} /> CASE-{caseObj.id.toString().padStart(4, '0')}: {caseObj.title}
             </h2>
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Priority: {caseObj.priority} • Created: {new Date(caseObj.created_at).toLocaleString()}</div>
           </div>
-          <button onClick={onClose} className="btn btn-secondary"><X size={20} /></button>
+          <button onClick={onClose} className="btn btn-secondary" aria-label="Close case details"><X size={20} /></button>
         </div>
 
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          {/* Main Content */}
-          <div style={{ flex: 2, padding: '1.5rem', overflowY: 'auto', borderRight: '1px solid var(--border-color)' }}>
+        <div className="case-modal-columns" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <div className="case-modal-primary" style={{ flex: 2, padding: '1.5rem', overflowY: 'auto', borderRight: '1px solid var(--border-color)' }}>
             <h3>Correlated Incident Cluster ({alerts.length} Alerts)</h3>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Alerts dynamically grouped by the Quantum Correlation Engine.</p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Alerts linked to this case. Unlink to remove from the cluster.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
               {alerts.map(a => (
                 <div key={a.id} style={{ padding: '1rem', background: 'var(--bg-primary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <strong>{a.attack_phase}</strong>
-                    <span style={{ color: '#ef4444' }}>Score: {a.score.toFixed(3)}</span>
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                      <span style={{ color: '#ef4444' }}>Score: {a.score.toFixed(3)}</span>
+                      {!readOnly && <button type="button" className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => unlinkAlert(a.id)}>Unlink</button>}
+                    </div>
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>{a.plain_english}</div>
                 </div>
               ))}
-              {alerts.length === 0 && <div style={{ color: 'var(--text-secondary)' }}>No alerts linked to this case yet.</div>}
+              {alerts.length === 0 && <div style={{ color: 'var(--text-secondary)' }}>No alerts linked to this case yet. Link from Triage Inbox.</div>}
             </div>
           </div>
 
-          {/* Sidebar */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--surface)' }}>
-            
             <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
               <h3 style={{ marginTop: 0 }}>Workflow</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 <div>
                   <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>Status</label>
-                  <select className="form-control" value={status} onChange={e => { setStatus(e.target.value); updateCase({ status: e.target.value }); }}>
+                  <select className="form-control" value={status} disabled={readOnly} onChange={e => { setStatus(e.target.value); updateCase({ status: e.target.value }); }}>
                     <option value="Open">Open</option>
                     <option value="Pending">Pending (Waiting on User)</option>
                     <option value="Resolved">Resolved</option>
@@ -117,10 +154,46 @@ const CaseDrillDown = ({ caseObj, onClose, token }) => {
                 </div>
                 <div>
                   <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>Assignee</label>
-                  <select className="form-control" value={assignee} onChange={e => { setAssignee(e.target.value); updateCase({ assignee_id: e.target.value }); }}>
+                  <select className="form-control" value={assignee} disabled={readOnly} onChange={e => { setAssignee(e.target.value); updateCase({ assignee_id: e.target.value }); }}>
                     <option value="">Unassigned</option>
                     {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
                   </select>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
+              <h3 style={{ marginTop: 0 }}>Threat Frameworks</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.85rem' }}>
+                <div>
+                  <strong>PEAK</strong>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    {['Prepare', 'Execute', 'Analyze', 'Act'].map(f => (
+                      <label key={f} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <input type="checkbox" checked={peak.includes(f)} disabled={readOnly} onChange={() => { const n = toggleFramework(peak, f, setPeak); updateCase({ peak_framework: JSON.stringify(n) }); }} /> {f}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <strong>Cyber Kill Chain</strong>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    {['Reconnaissance', 'Weaponization', 'Delivery', 'Exploitation', 'Installation', 'C2', 'Actions on Objectives'].map(f => (
+                      <label key={f} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <input type="checkbox" checked={killChain.includes(f)} disabled={readOnly} onChange={() => { const n = toggleFramework(killChain, f, setKillChain); updateCase({ kill_chain: JSON.stringify(n) }); }} /> {f}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <strong>Diamond Model</strong>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    {['Adversary', 'Capability', 'Infrastructure', 'Victim'].map(f => (
+                      <label key={f} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <input type="checkbox" checked={diamondModel.includes(f)} disabled={readOnly} onChange={() => { const n = toggleFramework(diamondModel, f, setDiamondModel); updateCase({ diamond_model: JSON.stringify(n) }); }} /> {f}
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -135,12 +208,11 @@ const CaseDrillDown = ({ caseObj, onClose, token }) => {
                   </div>
                 ))}
               </div>
-              <form onSubmit={addComment} style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
-                <input type="text" className="form-control" placeholder="Add a comment..." value={newComment} onChange={e => setNewComment(e.target.value)} style={{ flex: 1 }} />
-                <button type="submit" className="btn btn-primary"><MessageSquare size={16} /></button>
-              </form>
+              {!readOnly && <form onSubmit={addComment} style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto' }}>
+                <input type="text" className="form-control" placeholder="Add a comment..." value={newComment} onChange={e => setNewComment(e.target.value)} style={{ flex: 1 }} aria-label="New comment" />
+                <button type="submit" className="btn btn-primary" aria-label="Post comment"><MessageSquare size={16} /></button>
+              </form>}
             </div>
-
           </div>
         </div>
       </div>

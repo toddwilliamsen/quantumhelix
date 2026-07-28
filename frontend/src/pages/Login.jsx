@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Activity, Lock, Key, Smartphone } from 'lucide-react';
+import { Lock, Key, Smartphone } from 'lucide-react';
 import { startAuthentication } from '@simplewebauthn/browser';
 
 function Login({ onLogin }) {
@@ -7,8 +7,7 @@ function Login({ onLogin }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  
-  // MFA State
+
   const [mfaRequired, setMfaRequired] = useState(false);
   const [tempToken, setTempToken] = useState(null);
   const [totpEnabled, setTotpEnabled] = useState(false);
@@ -19,14 +18,14 @@ function Login({ onLogin }) {
     e.preventDefault();
     setLoading(true);
     setError('');
-    
+
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
-      
+
       const data = await res.json();
       if (res.ok) {
         if (data.mfa_required) {
@@ -35,12 +34,12 @@ function Login({ onLogin }) {
           setTotpEnabled(data.totp_enabled);
           setWebauthnEnabled(data.webauthn_enabled);
         } else {
-          onLogin(data.token, data.role, data.username);
+          onLogin(data.token, data.role, data.username, data.must_change_password);
         }
       } else {
         setError(data.message || 'Invalid credentials');
       }
-    } catch (err) {
+    } catch {
       setError('Network error. Is the backend running?');
     } finally {
       setLoading(false);
@@ -51,21 +50,21 @@ function Login({ onLogin }) {
     e.preventDefault();
     setLoading(true);
     setError('');
-    
+
     try {
       const res = await fetch('/api/login/mfa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ temp_token: tempToken, type: 'totp', code: totpCode })
       });
-      
+
       const data = await res.json();
       if (res.ok) {
-        onLogin(data.token, data.role, data.username);
+        onLogin(data.token, data.role, data.username, data.must_change_password);
       } else {
         setError(data.message || 'Invalid code');
       }
-    } catch (err) {
+    } catch {
       setError('Network error.');
     } finally {
       setLoading(false);
@@ -75,7 +74,7 @@ function Login({ onLogin }) {
   const handleWebAuthnLogin = async () => {
     setLoading(true);
     setError('');
-    
+
     try {
       const optRes = await fetch('/api/login/webauthn-options', {
         method: 'POST',
@@ -83,15 +82,15 @@ function Login({ onLogin }) {
         body: JSON.stringify({ temp_token: tempToken })
       });
       const options = await optRes.json();
-      
+
       if (!optRes.ok) {
         throw new Error(options.message);
       }
 
       let asseResp;
       try {
-        asseResp = await startAuthentication(options);
-      } catch (e) {
+        asseResp = await startAuthentication({ optionsJSON: options });
+      } catch {
         throw new Error('Hardware key interaction failed or cancelled.');
       }
 
@@ -103,7 +102,7 @@ function Login({ onLogin }) {
 
       const verData = await verRes.json();
       if (verRes.ok) {
-        onLogin(verData.token, verData.role, verData.username);
+        onLogin(verData.token, verData.role, verData.username, verData.must_change_password);
       } else {
         throw new Error(verData.message);
       }
@@ -115,82 +114,113 @@ function Login({ onLogin }) {
   };
 
   return (
-    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-color)' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '400px', padding: '2.5rem' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '2rem' }}>
-          <Activity color="var(--primary)" size={48} style={{ marginBottom: '1rem' }} />
-          <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Quantum Helix</h2>
-          <p style={{ color: 'var(--text-secondary)', margin: '0.5rem 0 0 0' }}>{mfaRequired ? 'Two-Factor Authentication' : 'Sign in to the SOC Console'}</p>
+    <div className="login-page">
+      <aside className="login-aside" aria-label="Product">
+        <div className="login-aside__content">
+          <p className="login-aside__eyebrow">Hybrid quantum-classical detection</p>
+          <p className="login-aside__brand">Quantum Helix</p>
+          <h2>Cloud threat detection with explainable model consensus.</h2>
+          <p>
+            Monitor normalized telemetry, investigate detector disagreement, and coordinate
+            response workflows from one analyst console.
+          </p>
         </div>
+      </aside>
 
-        {error && (
-          <div style={{ backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', padding: '0.75rem', borderRadius: '0.5rem', fontSize: '0.875rem', textAlign: 'center', marginBottom: '1.25rem' }}>
-            {error}
-          </div>
-        )}
+      <section className="login-panel" aria-labelledby="login-heading">
+        <div className="login-form">
+          <h1 id="login-heading" className="login-heading">
+            {mfaRequired ? 'Verify your identity' : 'Sign in to the console'}
+          </h1>
+          <p className="login-subtitle">
+            {mfaRequired
+              ? 'Complete the configured second factor to continue.'
+              : 'Use your organization credentials to access triage, cases, and analytics.'}
+          </p>
 
-        {!mfaRequired ? (
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div className="control-group">
-              <label className="control-label">Username</label>
-              <input 
-                type="text" 
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                style={{ padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)', outline: 'none' }}
-                required
-              />
-            </div>
-            <div className="control-group">
-              <label className="control-label">Password</label>
-              <input 
-                type="password" 
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                style={{ padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)', outline: 'none' }}
-                required
-              />
-            </div>
-            <button type="submit" className="btn btn-primary" style={{ padding: '0.75rem', marginTop: '0.5rem', fontSize: '1rem' }} disabled={loading}>
-              {loading ? 'Authenticating...' : <><Lock size={18} /> Sign In</>}
-            </button>
-          </form>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {webauthnEnabled && (
-              <button 
-                onClick={handleWebAuthnLogin}
-                className="btn btn-primary" 
-                style={{ padding: '0.75rem', fontSize: '1rem', width: '100%', display: 'flex', justifyContent: 'center', gap: '0.5rem' }}
-                disabled={loading}
-              >
-                <Key size={18} /> Use Hardware Key
+          {error && <div className="form-error" role="alert">{error}</div>}
+
+          {!mfaRequired ? (
+            <form onSubmit={handleSubmit} className="form-stack">
+              <div className="control-group">
+                <label className="control-label" htmlFor="username">Username</label>
+                <input
+                  id="username"
+                  type="text"
+                  autoComplete="username"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="control-group">
+                <label className="control-label" htmlFor="password">Password</label>
+                <input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={loading}>
+                <Lock size={16} /> {loading ? 'Signing in…' : 'Sign in'}
               </button>
-            )}
-
-            {totpEnabled && (
-              <form onSubmit={handleTotpSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: webauthnEnabled ? '1rem' : 0 }}>
-                {webauthnEnabled && <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— or use authenticator app —</div>}
-                <div className="control-group">
-                  <label className="control-label">6-Digit Code</label>
-                  <input 
-                    type="text" 
-                    value={totpCode}
-                    onChange={e => setTotpCode(e.target.value)}
-                    placeholder="000000"
-                    style={{ padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)', outline: 'none', textAlign: 'center', letterSpacing: '0.25em', fontSize: '1.2rem' }}
-                    required
-                    maxLength={6}
-                  />
-                </div>
-                <button type="submit" className="btn btn-secondary" style={{ padding: '0.75rem', fontSize: '1rem' }} disabled={loading}>
-                  {loading ? 'Verifying...' : <><Smartphone size={18} /> Verify Code</>}
+            </form>
+          ) : (
+            <div className="form-stack">
+              {webauthnEnabled && (
+                <button
+                  onClick={handleWebAuthnLogin}
+                  className="btn btn-primary"
+                  disabled={loading}
+                >
+                  <Key size={16} /> Use security key
                 </button>
-              </form>
-            )}
-          </div>
-        )}
-      </div>
+              )}
+
+              {totpEnabled && (
+                <form onSubmit={handleTotpSubmit} className="form-stack">
+                  {webauthnEnabled && (
+                    <span className="control-label">Or use an authenticator code</span>
+                  )}
+                  <div className="control-group">
+                    <label className="control-label" htmlFor="totp-code">Six-digit code</label>
+                    <input
+                      id="totp-code"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={totpCode}
+                      onChange={e => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      required
+                      autoFocus
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-secondary" disabled={loading || totpCode.length !== 6}>
+                    <Smartphone size={16} /> {loading ? 'Verifying…' : 'Verify code'}
+                  </button>
+                </form>
+              )}
+              <button
+                type="button"
+                className="link-button"
+                style={{ color: 'var(--text-secondary)' }}
+                onClick={() => {
+                  setMfaRequired(false);
+                  setTempToken(null);
+                  setTotpCode('');
+                  setError('');
+                }}
+              >
+                Back to sign in
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

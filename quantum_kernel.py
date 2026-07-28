@@ -19,8 +19,9 @@ import numpy as np
 import pennylane as qml
 from sklearn.svm import SVC
 
-from classical_baselines import FitStats
+from classical_baselines import FitStats, _fit_platt
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
 
 logger = logging.getLogger(__name__)
 
@@ -163,16 +164,41 @@ class QuantumKernelSVMDetector:
             raise ValueError("QuantumKernelSVMDetector requires both class labels")
 
         started = time.perf_counter()
-        gram = self.compute_kernel_matrix(matrix)
-        kernel_seconds = time.perf_counter() - started
-        self.kernel_evaluations = matrix.shape[0] * (matrix.shape[0] + 1) // 2
-        self.last_kernel_seconds = kernel_seconds
+        y = y.astype(int)
+        use_holdout = len(matrix) >= 24 and len(np.unique(y)) >= 2
+        if use_holdout:
+            try:
+                x_fit, x_cal, y_fit, y_cal = train_test_split(
+                    matrix, y, test_size=0.25, random_state=self.seed, stratify=y
+                )
+            except ValueError:
+                x_fit, x_cal, y_fit, y_cal = train_test_split(
+                    matrix, y, test_size=0.25, random_state=self.seed
+                )
+            if len(np.unique(y_fit)) < 2 or len(np.unique(y_cal)) < 2:
+                use_holdout = False
 
-        fit_started = time.perf_counter()
-        self.model.fit(gram, y.astype(int))
-        train_dec = self.model.decision_function(gram)
-        self._calibrator = _fit_platt(train_dec, y)
-        self._train_features = matrix
+        if use_holdout:
+            gram = self.compute_kernel_matrix(x_fit)
+            kernel_seconds = time.perf_counter() - started
+            self.kernel_evaluations = x_fit.shape[0] * (x_fit.shape[0] + 1) // 2
+            self.last_kernel_seconds = kernel_seconds
+            fit_started = time.perf_counter()
+            self.model.fit(gram, y_fit)
+            gram_cal = self.compute_kernel_matrix(x_cal, x_fit, symmetric=False)
+            self._calibrator = _fit_platt(self.model.decision_function(gram_cal), y_cal)
+            self._train_features = x_fit
+        else:
+            gram = self.compute_kernel_matrix(matrix)
+            kernel_seconds = time.perf_counter() - started
+            self.kernel_evaluations = matrix.shape[0] * (matrix.shape[0] + 1) // 2
+            self.last_kernel_seconds = kernel_seconds
+            fit_started = time.perf_counter()
+            self.model.fit(gram, y)
+            logger.warning("QSVM Platt calibration used in-sample decisions (n=%d)", len(matrix))
+            self._calibrator = _fit_platt(self.model.decision_function(gram), y)
+            self._train_features = matrix
+
         self._is_fitted = True
         total = time.perf_counter() - started
         stats = FitStats(

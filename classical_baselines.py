@@ -18,6 +18,7 @@ from typing import List, Optional, Sequence, Union
 
 import numpy as np
 from sklearn.ensemble import IsolationForest
+from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 
 logger = logging.getLogger(__name__)
@@ -41,18 +42,72 @@ def _as_2d(features: FeatureMatrix) -> np.ndarray:
     return arr
 
 
-def _normalize_scores(raw: np.ndarray, *, higher_is_threat: bool = True) -> np.ndarray:
-    """Map model outputs to threat scores in [0, 1]."""
-    values = np.asarray(raw, dtype=np.float64).reshape(-1)
-    if values.size == 0:
-        return values
-    if not higher_is_threat:
-        values = -values
-    lo = float(np.min(values))
-    hi = float(np.max(values))
-    if hi - lo < 1e-12:
-        return np.clip(values * 0.0 + 0.5, 0.0, 1.0)
-    return np.clip((values - lo) / (hi - lo), 0.0, 1.0)
+def _sigmoid_from_train(raw: np.ndarray, train_raw: np.ndarray) -> np.ndarray:
+    """Soft map using training mean/std — no hard clip saturation."""
+    mid = float(np.median(train_raw))
+    scale = float(np.std(train_raw))
+    if scale < 1e-8:
+        scale = 1.0
+    return 1.0 / (1.0 + np.exp(-(np.asarray(raw, dtype=np.float64) - mid) / scale))
+
+
+def _fit_platt(decisions: np.ndarray, labels: np.ndarray) -> LogisticRegression:
+    """1-D Platt calibrator: maps decision_function → P(attack)."""
+    x = np.asarray(decisions, dtype=np.float64).reshape(-1, 1)
+    y = np.asarray(labels, dtype=int).reshape(-1)
+    cal = LogisticRegression(max_iter=200)
+    cal.fit(x, y)
+    return cal
+
+
+def _calibrate_holdout(
+    model: SVC,
+    features: np.ndarray,
+    labels: np.ndarray,
+    *,
+    seed: int = 42,
+    min_samples: int = 24,
+) -> LogisticRegression:
+    """Fit SVM then Platt-calibrate on a held-out slice (avoids train-set leakage).
+
+    When too few samples are available, falls back to in-sample calibration and
+    logs a warning — callers should prefer larger corpuses for credible probs.
+    """
+    y = np.asarray(labels, dtype=int).reshape(-1)
+    if len(features) < min_samples or len(np.unique(y)) < 2:
+        model.fit(features, y)
+        logger.warning(
+            "Platt calibration used in-sample decisions (n=%d < %d); probabilities may be overconfident",
+            len(features),
+            min_samples,
+        )
+        return _fit_platt(model.decision_function(features), y)
+
+    from sklearn.model_selection import train_test_split
+
+    try:
+        x_fit, x_cal, y_fit, y_cal = train_test_split(
+            features, y, test_size=0.25, random_state=seed, stratify=y
+        )
+    except ValueError:
+        x_fit, x_cal, y_fit, y_cal = train_test_split(
+            features, y, test_size=0.25, random_state=seed
+        )
+    if len(np.unique(y_fit)) < 2 or len(np.unique(y_cal)) < 2:
+        model.fit(features, y)
+        logger.warning("Platt calibration fell back to in-sample (class imbalance on split)")
+        return _fit_platt(model.decision_function(features), y)
+
+    model.fit(x_fit, y_fit)
+    return _fit_platt(model.decision_function(x_cal), y_cal)
+
+
+def _apply_platt(calibrator: LogisticRegression, decisions: np.ndarray) -> np.ndarray:
+    x = np.asarray(decisions, dtype=np.float64).reshape(-1, 1)
+    # Class 1 = attack
+    classes = list(calibrator.classes_)
+    attack_idx = classes.index(1) if 1 in classes else -1
+    return calibrator.predict_proba(x)[:, attack_idx]
 
 
 class IsolationForestDetector:
@@ -75,8 +130,7 @@ class IsolationForestDetector:
             n_jobs=-1,
         )
         self._is_fitted = False
-        self._score_lo: float = 0.0
-        self._score_hi: float = 1.0
+        self._train_raw: Optional[np.ndarray] = None
         self.last_fit: Optional[FitStats] = None
 
     @property
@@ -84,12 +138,6 @@ class IsolationForestDetector:
         return self._is_fitted
 
     def fit(self, features: FeatureMatrix, labels: Optional[np.ndarray] = None) -> FitStats:
-        """
-        Fit the forest.
-
-        If ``labels`` are provided, prefer fitting on benign rows (label == 0)
-        when enough benign samples exist — mirrors SOC baseline modeling.
-        """
         matrix = _as_2d(features)
         train = matrix
         if labels is not None:
@@ -105,11 +153,7 @@ class IsolationForestDetector:
         started = time.perf_counter()
         self.model.fit(train)
         # decision_function: larger ⇒ more normal; we invert for threat.
-        raw = -self.model.decision_function(train)
-        self._score_lo = float(np.min(raw))
-        self._score_hi = float(np.max(raw))
-        if self._score_hi - self._score_lo < 1e-12:
-            self._score_hi = self._score_lo + 1.0
+        self._train_raw = -self.model.decision_function(train)
         self._is_fitted = True
         stats = FitStats(
             engine="isolation_forest",
@@ -124,16 +168,17 @@ class IsolationForestDetector:
         return float(self.score_batch(features)[0])
 
     def score_batch(self, features: FeatureMatrix) -> np.ndarray:
-        if not self._is_fitted:
+        if not self._is_fitted or self._train_raw is None:
             raise RuntimeError("IsolationForestDetector is not fitted")
         matrix = _as_2d(features)
         raw = -self.model.decision_function(matrix)
-        return np.clip((raw - self._score_lo) / (self._score_hi - self._score_lo), 0.0, 1.0)
+        return _sigmoid_from_train(raw, self._train_raw)
 
 
 class ClassicalSVMDetector:
     """
     Supervised classical RBF-SVM control group on PCA feature vectors.
+    Scores are Platt-calibrated attack probabilities.
     """
 
     def __init__(self, seed: int = 42, c: float = 2.0, gamma: Union[str, float] = "scale") -> None:
@@ -144,10 +189,9 @@ class ClassicalSVMDetector:
             class_weight="balanced",
             random_state=seed,
         )
+        self._calibrator: Optional[LogisticRegression] = None
         self._is_fitted = False
         self.last_fit: Optional[FitStats] = None
-        self._decision_lo: float = -1.0
-        self._decision_hi: float = 1.0
 
     @property
     def is_fitted(self) -> bool:
@@ -161,12 +205,7 @@ class ClassicalSVMDetector:
         if len(np.unique(y)) < 2:
             raise ValueError("ClassicalSVMDetector requires both benign and attack labels")
         started = time.perf_counter()
-        self.model.fit(matrix, y.astype(int))
-        train_dec = self.model.decision_function(matrix)
-        self._decision_lo = float(np.min(train_dec))
-        self._decision_hi = float(np.max(train_dec))
-        if self._decision_hi - self._decision_lo < 1e-12:
-            self._decision_hi = self._decision_lo + 1.0
+        self._calibrator = _calibrate_holdout(self.model, matrix, y, seed=getattr(self.model, "random_state", 42) or 42)
         self._is_fitted = True
         stats = FitStats(
             engine="classical_svm",
@@ -181,12 +220,8 @@ class ClassicalSVMDetector:
         return float(self.score_batch(features)[0])
 
     def score_batch(self, features: FeatureMatrix) -> np.ndarray:
-        if not self._is_fitted:
+        if not self._is_fitted or self._calibrator is None:
             raise RuntimeError("ClassicalSVMDetector is not fitted")
         matrix = _as_2d(features)
         decision = self.model.decision_function(matrix)
-        return np.clip(
-            (decision - self._decision_lo) / (self._decision_hi - self._decision_lo),
-            0.0,
-            1.0,
-        )
+        return _apply_platt(self._calibrator, decision)

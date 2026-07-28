@@ -1,14 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, Suspense, lazy } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { Play } from 'lucide-react';
 import CMDBWidget from '../components/CMDBWidget';
 import ThreatGraph from '../components/ThreatGraph';
-import ThreatGraph3D from '../components/ThreatGraph3D';
-import ThreatGraphGlobe from '../components/ThreatGraphGlobe';
 import EventDrillDownModal from '../components/EventDrillDownModal';
 
+const ThreatGraph3D = lazy(() => import('../components/ThreatGraph3D'));
+
 const ThreatMap = ({ token }) => {
+  const navigate = useNavigate();
+  const canMutate = localStorage.getItem('quantum_role') !== 'READ_ONLY';
   const [alerts, setAlerts] = useState([]);
+  const alertsRef = useRef([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedIdentityId, setSelectedIdentityId] = useState(null);
@@ -16,45 +20,62 @@ const ThreatMap = ({ token }) => {
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [viewMode, setViewMode] = useState('kanban'); // 'kanban' or '3d'
 
-  const fetchAlerts = async () => {
+  const fetchAlerts = useCallback(async (signal) => {
     try {
       const res = await fetch('/api/alerts?status=open&limit=1000', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal,
       });
       if (res.ok) {
         const data = await res.json();
-        setAlerts(data.alerts);
+        alertsRef.current = Array.isArray(data.alerts) ? data.alerts : [];
+        setAlerts(alertsRef.current);
         setError(null);
-      } else {
-        setError('Failed to fetch alerts');
+      } else if (!signal?.aborted) {
+        // Keep existing map on poll failure; only hard-fail initial load.
+        setError(prev => (alertsRef.current.length === 0 ? 'Failed to fetch alerts' : prev));
+        if (alertsRef.current.length > 0) toast.error('Failed to refresh threat map');
       }
     } catch (e) {
+      if (e.name === 'AbortError') return;
       console.error(e);
-      setError('Connection error');
+      setError(prev => (alertsRef.current.length === 0 ? 'Connection error' : prev));
+      if (alertsRef.current.length > 0) toast.error('Threat map refresh failed');
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchAlerts();
-    const interval = setInterval(fetchAlerts, 5000);
-    return () => clearInterval(interval);
   }, [token]);
 
   useEffect(() => {
-    if (selectedIdentityId) {
-      fetch(`/api/cmdb/${encodeURIComponent(selectedIdentityId)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+    const controller = new AbortController();
+    fetchAlerts(controller.signal);
+    let pollController;
+    const interval = setInterval(() => {
+      pollController?.abort();
+      pollController = new AbortController();
+      fetchAlerts(pollController.signal);
+    }, 5000);
+    return () => {
+      controller.abort();
+      pollController?.abort();
+      clearInterval(interval);
+    };
+  }, [fetchAlerts]);
+
+  useEffect(() => {
+    if (!selectedIdentityId) {
+      setCmdbData(null);
+      return undefined;
+    }
+    const controller = new AbortController();
+    fetch(`/api/cmdb/${encodeURIComponent(selectedIdentityId)}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      signal: controller.signal,
+    })
       .then(res => res.json())
       .then(data => setCmdbData(data))
-      .catch(e => console.error(e));
-    } else {
-      setCmdbData(null);
-    }
+      .catch(e => { if (e.name !== 'AbortError') console.error(e); });
+    return () => controller.abort();
   }, [selectedIdentityId, token]);
 
   const handleCutOff = async (identity) => {
@@ -74,7 +95,7 @@ const ThreatMap = ({ token }) => {
       } else {
         toast.error('Failed to cut off identity.');
       }
-    } catch (e) {
+    } catch {
       toast.error('Error contacting server.');
     }
   };
@@ -87,7 +108,12 @@ const ThreatMap = ({ token }) => {
       }
     });
     if (!res.ok) throw new Error('Failed');
+    const data = await res.json().catch(() => ({}));
     fetchAlerts();
+    if (actionStr === 'escalate' && data.case_id) {
+      toast.success(data.message || `Escalated to CASE-${String(data.case_id).padStart(4, '0')}`);
+      navigate(`/cases?caseId=${data.case_id}`);
+    }
   };
 
   const identities = useMemo(() => {
@@ -127,7 +153,7 @@ const ThreatMap = ({ token }) => {
   };
 
   const getSeverityLabel = (score) => {
-    if (score >= 0.85) return 'Quantum-Confirmed Anomaly';
+    if (score >= 0.85) return 'Critical risk';
     if (score >= 0.75) return 'High Risk';
     if (score >= 0.68) return 'Suspicious';
     return 'Normal';
@@ -137,9 +163,8 @@ const ThreatMap = ({ token }) => {
     return (
       <div className="page-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-          <div className="spinner" style={{ border: '4px solid var(--border-color)', borderTopColor: 'var(--text-primary)', borderRadius: '50%', width: '40px', height: '40px', animation: 'spin 1s linear infinite' }} />
-          <div style={{ color: 'var(--text-secondary)' }}>Loading Threat Map...</div>
-          <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
+          <div className="spinner" style={{ width: 32, height: 32 }} />
+          <div style={{ color: 'var(--text-secondary)' }}>Loading threat map…</div>
         </div>
       </div>
     );
@@ -148,66 +173,73 @@ const ThreatMap = ({ token }) => {
   if (error) {
     return (
       <div className="page-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <div style={{ color: '#ef4444', textAlign: 'center' }}>
-          <h2 style={{ margin: '0 0 0.5rem 0' }}>Error Loading Data</h2>
+        <div style={{ color: 'var(--danger)', textAlign: 'center' }}>
+          <h2 style={{ margin: '0 0 0.5rem 0' }}>Threat map unavailable</h2>
           <p style={{ margin: 0 }}>{error}</p>
-          <button className="btn btn-primary" onClick={fetchAlerts} style={{ marginTop: '1rem' }}>Retry</button>
+          <button className="btn btn-primary" onClick={() => fetchAlerts()} style={{ marginTop: '1rem' }}>Retry</button>
         </div>
       </div>
     );
   }
 
   const selectedIdentity = identities.find(id => id.identity === selectedIdentityId);
-  const selectedLatestAlert = selectedIdentity?.alerts[0]; // Alerts are sorted desc by default
 
   return (
     <div className="page-container" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '0' }}>
-      <header className="page-header" style={{ padding: '1.5rem 1.5rem 0 1.5rem', marginBottom: '1rem' }}>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <header className="page-header">
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
           <div>
-            <h1 style={{ margin: 0 }}>Predictive Threat Map (Kill Chain)</h1>
-            <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)' }}>
-              Track identities as they move through MITRE ATT&CK phases. Cut off access before they reach Exfiltration.
+            <h1 className="page-title">Threat map</h1>
+            <p className="page-subtitle">
+              Review identity activity by observed attack phase and relationship.
             </p>
           </div>
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-            <div style={{ display: 'flex', background: 'var(--bg-secondary)', borderRadius: '4px', padding: '0.25rem' }}>
+          <div className="page-actions">
+            <div className="segmented-control" aria-label="Threat map view">
               <button 
                 onClick={() => setViewMode('kanban')} 
-                style={{ padding: '0.5rem 1rem', background: viewMode === 'kanban' ? 'var(--bg-primary)' : 'transparent', color: viewMode === 'kanban' ? 'var(--text-primary)' : 'var(--text-secondary)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: viewMode === 'kanban' ? 600 : 400 }}
+                className={viewMode === 'kanban' ? 'is-active' : ''}
+                aria-pressed={viewMode === 'kanban'}
               >
-                Kanban
+                Phases
               </button>
               <button 
                 onClick={() => setViewMode('3d')} 
-                style={{ padding: '0.5rem 1rem', background: viewMode === '3d' ? 'var(--bg-primary)' : 'transparent', color: viewMode === '3d' ? 'var(--text-primary)' : 'var(--text-secondary)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: viewMode === '3d' ? 600 : 400 }}
+                className={viewMode === '3d' ? 'is-active' : ''}
+                aria-pressed={viewMode === '3d'}
               >
-                3D Network
-              </button>
-              <button 
-                onClick={() => setViewMode('globe')} 
-                style={{ padding: '0.5rem 1rem', background: viewMode === 'globe' ? 'var(--bg-primary)' : 'transparent', color: viewMode === 'globe' ? 'var(--text-primary)' : 'var(--text-secondary)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: viewMode === 'globe' ? 600 : 400 }}
-              >
-                3D Globe
+                Network
               </button>
             </div>
-            <button 
-              className="btn btn-primary" 
-              onClick={async () => {
-                const res = await fetch('/api/replay_attack', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }});
+            {canMutate && (
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                const res = await fetch('/api/replay_attack', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ kind: 'mixed', count: 8 }),
+                });
                 if (res.ok) {
-                  toast.success("Synthetic attack injected!", { icon: '💉' });
+                  const data = await res.json();
+                  toast.success(data.message || 'Test scenario queued');
+                } else {
+                  const err = await res.json().catch(() => ({}));
+                  toast.error(err.message || 'Replay failed');
                 }
-              }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-            >
-              <Play size={16} /> Replay Synthetic Attack
-            </button>
+                }}
+              >
+                <Play size={15} /> Run test scenario
+              </button>
+            )}
           </div>
         </div>
       </header>
       
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <div className="threat-map-layout" style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {viewMode === 'kanban' ? (
           <ThreatGraph 
             phases={phases}
@@ -216,29 +248,23 @@ const ThreatMap = ({ token }) => {
             setSelectedIdentityId={setSelectedIdentityId}
             getSeverityColor={getSeverityColor}
           />
-        ) : viewMode === '3d' ? (
-          <ThreatGraph3D 
-            alerts={alerts}
-            selectedIdentityId={selectedIdentityId}
-            setSelectedIdentityId={setSelectedIdentityId}
-            getSeverityColor={getSeverityColor}
-          />
         ) : (
-          <ThreatGraphGlobe 
-            alerts={alerts}
-            selectedIdentityId={selectedIdentityId}
-            setSelectedIdentityId={setSelectedIdentityId}
-            getSeverityColor={getSeverityColor}
-          />
+          <Suspense fallback={<p style={{ color: 'var(--text-secondary)', padding: '2rem' }}>Loading 3D graph…</p>}>
+            <ThreatGraph3D
+              alerts={alerts}
+              selectedIdentityId={selectedIdentityId}
+              setSelectedIdentityId={setSelectedIdentityId}
+              getSeverityColor={getSeverityColor}
+            />
+          </Suspense>
         )}
 
         <CMDBWidget 
           selectedIdentity={selectedIdentity}
           cmdbData={cmdbData}
-          selectedLatestAlert={selectedLatestAlert}
           getSeverityColor={getSeverityColor}
           getSeverityLabel={getSeverityLabel}
-          handleCutOff={handleCutOff}
+          handleCutOff={canMutate ? handleCutOff : null}
           phases={phases}
           onSelectAlert={(alert) => setSelectedAlert(alert)}
         />

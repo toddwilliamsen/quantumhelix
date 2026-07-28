@@ -35,6 +35,14 @@ need npm
 need zip
 need python3
 
+# Production secrets — abort early rather than deploying insecure defaults.
+SECRET_KEY="${SECRET_KEY:-}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+CORS_ORIGINS="${CORS_ORIGINS:-}"
+[[ -n "$SECRET_KEY" ]] || die "Set SECRET_KEY to a strong random value before deploying."
+[[ -n "$ADMIN_PASSWORD" && "$ADMIN_PASSWORD" != "quantum123" ]] || die "Set ADMIN_PASSWORD to a non-default value before deploying."
+[[ -n "$CORS_ORIGINS" ]] || die "Set CORS_ORIGINS to an explicit allow-list (e.g. https://your-app.azurewebsites.net)."
+
 log "Starting Azure deployment (stack=${PYTHON_STACK}, app=${WEB_APP_NAME})"
 
 # --- Frontend build ----------------------------------------------------------
@@ -80,6 +88,7 @@ az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file azuredeploy.json \
   --parameters "webAppName=${WEB_APP_NAME}" "location=${LOCATION}" "linuxFxVersion=${PYTHON_STACK}" \
+              "secretKey=${SECRET_KEY}" "adminPassword=${ADMIN_PASSWORD}" "corsOrigins=${CORS_ORIGINS}" \
   --output none
 
 # Force runtime + build flags even on incremental updates of an old site
@@ -88,7 +97,7 @@ az webapp config set \
   --resource-group "$RESOURCE_GROUP" \
   --name "$WEB_APP_NAME" \
   --linux-fx-version "$PYTHON_STACK" \
-  --startup-file "gunicorn --bind=0.0.0.0:8000 --timeout 600 --threads 4 api:app" \
+  --startup-file "gunicorn --bind=0.0.0.0:8000 --timeout 600 --threads 4 app:app" \
   --output none
 
 az webapp config appsettings set \
@@ -98,6 +107,11 @@ az webapp config appsettings set \
     SCM_DO_BUILD_DURING_DEPLOYMENT=true \
     ENABLE_ORYX_BUILD=true \
     WEBSITES_PORT=8000 \
+    FLASK_ENV=production \
+    QUANTUM_STRICT_SECRETS=1 \
+    SECRET_KEY="$SECRET_KEY" \
+    ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    CORS_ORIGINS="$CORS_ORIGINS" \
   --output none
 
 RUNTIME="$(az webapp config show -g "$RESOURCE_GROUP" -n "$WEB_APP_NAME" --query linuxFxVersion -o tsv)"
@@ -127,6 +141,7 @@ PY_MODULES=(
   quantum_kernel.py
   cmdb.py
   itsm.py
+  explanation.py
 )
 
 for f in "${PY_MODULES[@]}"; do

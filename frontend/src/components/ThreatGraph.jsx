@@ -13,15 +13,21 @@ const ThreatGraph = ({ phases, identities, selectedIdentityId, setSelectedIdenti
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1 }}>
             {identities.filter(idObj => {
-              const highestPhaseIdx = Math.max(...Array.from(idObj.phases).map(p => phases.indexOf(p)));
+              const knownPhaseIndexes = Array.from(idObj.phases)
+                .map(p => phases.indexOf(p))
+                .filter(index => index >= 0);
+              const highestPhaseIdx = knownPhaseIndexes.length > 0 ? Math.max(...knownPhaseIndexes) : 0;
               return phases.indexOf(phase) === highestPhaseIdx;
             }).map(idObj => {
               const color = getSeverityColor(idObj.maxScore);
               const isSelected = selectedIdentityId === idObj.identity;
               
               return (
-                <div 
-                  key={idObj.identity} 
+                <button
+                  type="button"
+                  key={idObj.identity}
+                  className="threat-card"
+                  aria-pressed={isSelected}
                   onClick={() => setSelectedIdentityId(idObj.identity)}
                   style={{
                     background: 'var(--bg-primary)',
@@ -33,15 +39,10 @@ const ThreatGraph = ({ phases, identities, selectedIdentityId, setSelectedIdenti
                     transition: 'transform 0.1s ease, box-shadow 0.1s ease',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '0.75rem'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = isSelected ? `0 4px 12px ${color}66` : '0 4px 12px rgba(0,0,0,0.15)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'none';
-                    e.currentTarget.style.boxShadow = isSelected ? `0 0 0 1px ${color}` : '0 1px 3px rgba(0,0,0,0.1)';
+                    gap: '0.75rem',
+                    color: 'var(--text-primary)',
+                    font: 'inherit',
+                    textAlign: 'left'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -70,7 +71,7 @@ const ThreatGraph = ({ phases, identities, selectedIdentityId, setSelectedIdenti
                       {idObj.maxScore.toFixed(3)}
                     </span>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>

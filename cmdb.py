@@ -36,12 +36,28 @@ MOCK_CMDB = {
 def enrich_identity(identity_string):
     """
     Simulate a CMDB lookup.
-    Matches the normalized identity string against the mock CMDB.
+    Prefers exact matches, then longest substring match to avoid
+    ambiguous hits (e.g. svc-shadow-0 vs svc-shadow-01).
     """
-    for key, data in MOCK_CMDB.items():
-        if key in identity_string:
-            return data
-    
+    if not identity_string:
+        return {
+            "owner": "Unknown",
+            "department": "Unknown",
+            "business_criticality": "Unclassified",
+            "asset_type": "Unknown",
+            "description": "Asset not found in CMDB"
+        }
+
+    if identity_string in MOCK_CMDB:
+        return MOCK_CMDB[identity_string]
+
+    best_key = None
+    for key in MOCK_CMDB:
+        if key in identity_string and (best_key is None or len(key) > len(best_key)):
+            best_key = key
+    if best_key:
+        return MOCK_CMDB[best_key]
+
     return {
         "owner": "Unknown",
         "department": "Unknown",

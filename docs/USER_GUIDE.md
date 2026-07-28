@@ -107,9 +107,11 @@ This application runs as a decoupled React frontend and a Flask backend.
 
 **Step 1: Start the backend API**
 ```bash
-python api.py
+python app.py
 ```
 *(Runs on http://localhost:8000)*
+
+On first start the app creates a default tenant and an `admin` user (`SUPER_ADMIN`). The default password is `quantum123` unless you set `ADMIN_PASSWORD`. Change it before any shared demo.
 
 **Step 2: Start the frontend UI**
 Open a new terminal and run:
@@ -118,7 +120,7 @@ cd frontend
 npm install
 npm run dev
 ```
-*(Runs on http://localhost:5173 or similar)*
+*(Runs on http://localhost:5173 or similar; API calls proxy to port 8000)*
 
 Opens a full SOC intelligence surface wired to the **same hybrid ensemble** as the CLI — Isolation Forest + classical SVM + quantum kernel.
 
@@ -126,26 +128,75 @@ Opens a full SOC intelligence surface wired to the **same hybrid ensemble** as t
 
 | Panel | Purpose |
 |-------|---------|
-| Threat score over time | Live ensemble line chart with optional multi-engine overlay |
-| Latest engine votes | Bar chart of IF / SVM / quantum kernel / ensemble for the newest event |
-| Cloud mix | Event volume + alert volume for AWS vs Azure |
-| Incident feed | Threshold crossings with per-engine score columns |
-| Evidence Lab | In-app classical vs quantum benchmark scoreboard |
+| Dashboard | Live ensemble score, engine votes, cloud mix |
+| Triage Inbox | Queue with claim / My queue / escalate-to-case / false positive; full investigation modal |
+| Cases | Incident cases, assignment, comments, PEAK / kill-chain notes (opens from escalate) |
+| Threat Map | Identity progression and containment actions |
+| Model controls | Ensemble weight playground (**admins only**) |
+| Analytics | Overview metrics and classical vs quantum benchmark |
+| My account | Self-service password change and MFA enrollment (required on first login after admin reset) |
+| Administration | Suppression, playbooks, audit, tenants, **user management** |
 
 **Sidebar**
 
 | Control | Purpose |
 |---------|---------|
-| Alert threshold | Incident + SIEM dry-run gate |
-| Events / refresh | Batch size each UI tick |
-| Refresh delay | Seconds between stream updates |
-| Multi-engine overlay | Show IF / SVM / QSVM beside ensemble |
-| Start / Pause / Trash | Stream lifecycle in the sidebar |
-| Settings & Rules | Define suppression rules |
+| Alert threshold | Incident gate (admins) |
+| Start / Pause / Clear | Stream lifecycle (admins) |
+| Theme | Light / dark for all roles |
+| My account | Password + MFA for the signed-in user |
+| Administration | Policy and access (admins only) |
 
-First load fits PCA + the ensemble (a few seconds). Click **Start** in the sidebar.
+First load fits PCA + the ensemble (a few seconds). Click **Start monitoring** in the sidebar.
 
 The backend intentionally injects a mix of normal traffic, loud attacks, and subtle APT-style events so the **threat theater**, **engine disagreement**, and **red alert markers** show up during a short demo — not only rare mock anomalies.
+
+### 3.3.1 Roles and permissions
+
+| Role | Typical use | Notes |
+|------|-------------|-------|
+| `SUPER_ADMIN` | Platform owner | All tenants, user/tenant admin, stream controls |
+| `TENANT_ADMIN` | Tenant owner | Users and policy inside their tenant; cannot create/promote admins |
+| `TIER_2` | Senior analyst | Full case/alert mutation in tenant |
+| `TIER_1` | Analyst | Case/alert mutation in tenant |
+| `READ_ONLY` | Auditor / observer | View data; mutations and inject-test actions are disabled |
+
+Deactivated accounts cannot sign in, and any existing session is rejected on the next authenticated request (including the live SSE ticket). Password reset and MFA clear also revoke outstanding sessions.
+
+**Triage workflow:** Claim an alert into **My queue**, acknowledge or mark false positive, or **Escalate to case** (creates `CASE-####` and opens Cases). New open alerts toast when you are not already on Triage.
+
+### 3.3.2 My account
+
+Every signed-in user can open **My account** to:
+
+1. Change their password (current password required; new password ≥ 10 characters)
+2. Enroll an authenticator app (TOTP)
+3. Register a security key (WebAuthn)
+
+New accounts and admin password resets set `must_change_password`; the console routes to **My account** until the password is updated.
+
+If a user loses MFA access, an administrator can clear enrollment under **Administration → Users**.
+
+### 3.3.3 Administration → Users
+
+Visible to `SUPER_ADMIN` and `TENANT_ADMIN`. From this tab you can:
+
+| Action | Detail |
+|--------|--------|
+| Create user | Username, initial password (≥ 10 chars), role; tenant picker for super admins |
+| Change role | Inline role select (tenant admins limited to Tier 1 / Tier 2 / Read Only) |
+| Move tenant | Super admin only |
+| Reset password | Sets a new password; share it out of band |
+| Clear MFA | Removes TOTP / WebAuthn so the user can re-enroll |
+| Activate / Deactivate | Immediate access revoke without deleting history |
+| Delete | Permanent removal; case assignments cleared, comments retained as “Deleted user” |
+
+Guardrails:
+
+- You cannot administer your own account from this table (use **My account**)
+- Tenant admins cannot manage other admins or users in other tenants
+- The last active super admin cannot be demoted, deactivated, or deleted
+- Creates, updates, password resets, MFA clears, and deletes are written to the audit log
 
 ### 3.4 Orchestration entrypoint
 
@@ -179,7 +230,7 @@ Stateful mapping of alerts to track attacker progression.
 1. **Identity Tracking**: Alerts are automatically mapped into `Initial Access`, `Discovery`, `Credential Access`, or `Exfiltration` based on telemetry.
 2. **Containment**: Click **Cut Off Access** on any identity card to immediately acknowledge all related alerts and block future telemetry from that identity.
 
-### Analytics & Modelsntity & source
+### Identity & source
 
 | Field | Meaning |
 |-------|---------|
@@ -219,7 +270,7 @@ In this prototype, Slack delivery is a **dry-run** (payload logged; no real HTTP
 1. `./setup.sh`  
 2. `python validate.py` → expect `PASSED`  
 3. `python cli.py scan --duration 5 --threshold 0.70` → expect some `ALERT` rows (~5% injected anomalies)  
-4. Start the backend (`python api.py`) and frontend (`cd frontend && npm run dev`), log in as admin, start stream, watch Triage Inbox  
+4. Start the backend (`python app.py`) and frontend (`cd frontend && npm run dev`), log in as `admin`, open **Administration → Users** if you need additional analyst accounts, start the stream, watch Triage Inbox
 
 ### B. Threshold tuning
 
@@ -233,6 +284,19 @@ In this prototype, Slack delivery is a **dry-run** (payload logged; no real HTTP
 2. Correlate with CIM features (velocity, auth failures, bytes)  
 3. In a production extension, open the ASFF `Id` in Security Hub or CEF in Sentinel  
 
+### D. Provision an analyst
+
+1. Sign in as `admin` (or a tenant admin)  
+2. Open **Administration → Users**  
+3. Create the account with the appropriate role and initial password  
+4. Have the analyst sign in, open **My account**, change the password, and enroll MFA  
+
+### E. Offboard an analyst
+
+1. Prefer **Deactivate** so history and audit attribution remain  
+2. Use **Delete** only when the account must be removed permanently  
+3. Confirm the user can no longer sign in and that any open session is ended on the next API call  
+
 ---
 
 ## 6. Interfaces cheatsheet
@@ -243,9 +307,10 @@ In this prototype, Slack delivery is a **dry-run** (payload logged; no real HTTP
 | Prove loud-attack path | `python validate.py` |
 | Classical vs quantum scoreboard | `python benchmark.py` |
 | Batch scan (ensemble) | `python cli.py scan --engine ensemble --duration 10` |
-| Live UI | `python api.py` AND `cd frontend && npm run dev` |
+| Live UI | `python app.py` AND `cd frontend && npm run dev` |
 | Debug QNN path | `python main.py -v` |
 | PoC+ status doc | See [POC_PLUS.md](POC_PLUS.md) |
+| User management API | See [API Reference — Auth & users](API_REFERENCE.md#auth--users) |
 
 ---
 
@@ -255,5 +320,6 @@ In this prototype, Slack delivery is a **dry-run** (payload logged; no real HTTP
 |---------|----------------|
 | Import / PennyLane errors | [Operations — Troubleshooting](OPERATIONS.md#troubleshooting) |
 | Scores all look similar | [Validation Guide](VALIDATION.md) and threshold settings |
+| Login / roles / MFA | [Operations — Access control](OPERATIONS.md#access-control) and §3.3 above |
 | Want field-level AWS/Azure mapping | [CIM Reference](CIM.md) |
 | Want circuit / data-flow detail | [Architecture](ARCHITECTURE.md) |

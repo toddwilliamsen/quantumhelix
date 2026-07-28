@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { startRegistration } from '@simplewebauthn/browser';
+import { MIN_PASSWORD_LENGTH, ROLE_LABELS, assignableRoles } from '../roles';
 
 function Settings({ token }) {
   const [rules, setRules] = useState([]);
@@ -8,12 +8,7 @@ function Settings({ token }) {
   const [ruleValue, setRuleValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('detection');
-  
-  // MFA State
-  const [mfaStatus, setMfaStatus] = useState({ totp_enabled: false, webauthn_enabled: false });
-  const [qrCode, setQrCode] = useState(null);
-  const [totpCode, setTotpCode] = useState('');
-  
+
   // SOAR State
   const [playbooks, setPlaybooks] = useState([]);
   const [pbField, setPbField] = useState('score');
@@ -26,32 +21,47 @@ function Settings({ token }) {
 
   // Multi-tenant & RBAC State
   const role = localStorage.getItem('quantum_role');
+  const currentUsername = localStorage.getItem('quantum_username');
   const [tenants, setTenants] = useState([]);
   const [users, setUsers] = useState([]);
+  const [usersLoaded, setUsersLoaded] = useState(false);
   const [newTenantName, setNewTenantName] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newUserRole, setNewUserRole] = useState('TIER_1');
   const [newUserTenant, setNewUserTenant] = useState('');
+  const [userAction, setUserAction] = useState(null); // { id, kind: 'password' | 'delete' }
+  const [userActionPassword, setUserActionPassword] = useState('');
+  const [busyUserId, setBusyUserId] = useState(null);
 
-  const fetchTenants = async () => {
+  const fetchTenants = useCallback(async () => {
     try {
       const res = await fetch('/api/tenants', { headers: { 'Authorization': `Bearer ${token}` } });
       if (res.ok) setTenants(await res.json());
     } catch (e) { console.error(e); }
-  };
+  }, [token]);
   
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       const res = await fetch('/api/users', { headers: { 'Authorization': `Bearer ${token}` } });
-      if (res.ok) setUsers(await res.json());
-    } catch (e) { console.error(e); }
-  };
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(Array.isArray(data) ? data : []);
+      } else {
+        toast.error('Could not load the user directory');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Could not load the user directory');
+    } finally {
+      setUsersLoaded(true);
+    }
+  }, [token]);
   
   useEffect(() => {
     if (role === 'SUPER_ADMIN') fetchTenants();
     if (role === 'SUPER_ADMIN' || role === 'TENANT_ADMIN') fetchUsers();
-  }, [role]);
+  }, [role, fetchTenants, fetchUsers]);
 
   const createTenant = async (e) => {
     e.preventDefault();
@@ -65,8 +75,11 @@ function Settings({ token }) {
         toast.success("Tenant created");
         setNewTenantName('');
         fetchTenants();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.message || 'Failed to create tenant');
       }
-    } catch (e) { toast.error("Failed to create tenant"); }
+    } catch { toast.error("Failed to create tenant"); }
   };
   
   const toggleCompliance = async (tenantId) => {
@@ -78,8 +91,11 @@ function Settings({ token }) {
       if (res.ok) {
         toast.success("Compliance mode updated");
         fetchTenants();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.message || 'Failed to update compliance');
       }
-    } catch (e) { toast.error("Failed to update compliance"); }
+    } catch { toast.error("Failed to update compliance"); }
   };
 
   const createUser = async (e) => {
@@ -95,56 +111,120 @@ function Settings({ token }) {
         setNewUsername('');
         setNewPassword('');
         fetchUsers();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.message || 'Failed to create user');
       }
-    } catch (e) { toast.error("Failed to create user"); }
+    } catch { toast.error("Failed to create user"); }
   };
 
+  const closeUserAction = () => {
+    setUserAction(null);
+    setUserActionPassword('');
+  };
 
-  useEffect(() => {
-    fetchRules();
-    fetchMfaStatus();
-    fetchPlaybooks();
-    fetchAuditLogs();
-  }, []);
+  const mutateUser = async (user, { path = '', method = 'PATCH', body, success, failure }) => {
+    setBusyUserId(user.id);
+    try {
+      const res = await fetch(`/api/users/${user.id}${path}`, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || failure);
+        return false;
+      }
+      toast.success(data.message || success);
+      closeUserAction();
+      fetchUsers();
+      return true;
+    } catch {
+      toast.error(failure);
+      return false;
+    } finally {
+      setBusyUserId(null);
+    }
+  };
 
-  const fetchPlaybooks = async () => {
+  const changeUserRole = (user, nextRole) => mutateUser(user, {
+    body: { role: nextRole },
+    success: `${user.username} is now ${ROLE_LABELS[nextRole] || nextRole}`,
+    failure: 'Failed to change role',
+  });
+
+  const changeUserTenant = (user, tenantId) => mutateUser(user, {
+    body: { tenant_id: Number(tenantId) },
+    success: `${user.username} moved to another tenant`,
+    failure: 'Failed to move user',
+  });
+
+  const toggleUserActive = (user) => mutateUser(user, {
+    body: { is_active: !user.is_active },
+    success: user.is_active ? `${user.username} deactivated` : `${user.username} reactivated`,
+    failure: 'Failed to update account status',
+  });
+
+  const resetUserMfa = (user) => mutateUser(user, {
+    path: '/mfa',
+    method: 'DELETE',
+    success: `MFA cleared for ${user.username}`,
+    failure: 'Failed to clear MFA enrollment',
+  });
+
+  const deleteUser = (user) => mutateUser(user, {
+    method: 'DELETE',
+    success: `${user.username} deleted`,
+    failure: 'Failed to delete user',
+  });
+
+  const submitUserPassword = (e, user) => {
+    e.preventDefault();
+    return mutateUser(user, {
+      path: '/password',
+      method: 'POST',
+      body: { password: userActionPassword },
+      success: `Password reset for ${user.username}`,
+      failure: 'Failed to reset password',
+    });
+  };
+
+  const fetchPlaybooks = useCallback(async () => {
     try {
       const res = await fetch('/api/playbooks', { headers: { 'Authorization': `Bearer ${token}` } });
       if (res.ok) setPlaybooks(await res.json());
     } catch (e) { console.error(e); }
-  };
+  }, [token]);
 
-  const fetchAuditLogs = async () => {
+  const fetchAuditLogs = useCallback(async () => {
     try {
       const res = await fetch('/api/audit', { headers: { 'Authorization': `Bearer ${token}` } });
       if (res.ok) setAuditLogs(await res.json());
     } catch (e) { console.error(e); }
-  };
+  }, [token]);
 
-  const fetchMfaStatus = async () => {
-    try {
-      const res = await fetch('/api/mfa/status', { headers: { 'Authorization': `Bearer ${token}` } });
-      if (res.ok) {
-        const data = await res.json();
-        setMfaStatus(data);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const fetchRules = async () => {
+  const fetchRules = useCallback(async () => {
     try {
       const res = await fetch('/api/rules', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
+      if (!res.ok || !Array.isArray(data)) {
+        throw new Error(data?.message || 'Failed to load suppression rules');
+      }
       setRules(data);
     } catch (e) {
       console.error(e);
       toast.error('Failed to load suppression rules');
     }
-  };
+  }, [token]);
+
+  useEffect(() => {
+    fetchRules();
+    fetchPlaybooks();
+    fetchAuditLogs();
+  }, [fetchAuditLogs, fetchPlaybooks, fetchRules]);
 
   const addRule = async (e) => {
     e.preventDefault();
@@ -193,75 +273,6 @@ function Settings({ token }) {
     }
   };
 
-  const setupTotp = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('/api/mfa/setup-totp', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
-      const data = await res.json();
-      setQrCode(data.qr_code);
-    } catch (e) {
-      toast.error('Failed to setup TOTP');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const verifyTotp = async (e) => {
-    e.preventDefault();
-    try {
-      setLoading(true);
-      const res = await fetch('/api/mfa/verify-totp', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ code: totpCode })
-      });
-      if (res.ok) {
-        toast.success('Authenticator App configured successfully!');
-        setQrCode(null);
-        fetchMfaStatus();
-      } else {
-        toast.error('Invalid TOTP Code');
-      }
-    } catch (e) {
-      toast.error('Failed to verify TOTP');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const registerHardwareKey = async () => {
-    try {
-      setLoading(true);
-      const optRes = await fetch('/api/mfa/register-webauthn', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
-      const options = await optRes.json();
-      
-      let attResp;
-      try {
-        attResp = await startRegistration(options);
-      } catch (e) {
-        toast.error('Hardware key registration cancelled.');
-        return;
-      }
-
-      const verRes = await fetch('/api/mfa/verify-webauthn-registration', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(attResp)
-      });
-      
-      if (verRes.ok) {
-        toast.success('Hardware key registered successfully!');
-        fetchMfaStatus();
-      } else {
-        toast.error('Failed to verify hardware key');
-      }
-    } catch (e) {
-      toast.error('Error during hardware key registration');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const addPlaybook = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -275,7 +286,7 @@ function Settings({ token }) {
         toast.success('Playbook created');
         fetchPlaybooks();
       }
-    } catch (e) {
+    } catch {
       toast.error('Failed to create playbook');
     } finally {
       setLoading(false);
@@ -292,7 +303,7 @@ function Settings({ token }) {
         toast.success('Playbook removed');
         fetchPlaybooks();
       }
-    } catch (e) {
+    } catch {
       toast.error('Failed to remove playbook');
     }
   };
@@ -300,79 +311,79 @@ function Settings({ token }) {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Settings & Rules</h1>
-        <p className="page-subtitle">Manage system configuration and alert suppression rules.</p>
+        <h1 className="page-title">Administration</h1>
+        <p className="page-subtitle">Manage detection policy, response automation, access, and integrations.</p>
       </div>
 
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', overflowX: 'auto' }}>
+      <div className="settings-tabs" role="tablist" aria-label="Administration sections">
         <button 
-          className={`btn ${activeTab === 'detection' ? 'btn-primary' : ''}`}
+          className={`btn ${activeTab === 'detection' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('detection')}
-          style={{ whiteSpace: 'nowrap', background: activeTab === 'detection' ? 'var(--primary)' : 'transparent', color: activeTab === 'detection' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
+          role="tab"
+          aria-selected={activeTab === 'detection'}
         >
-          Detection Engineering (Rules)
+          Suppression
         </button>
         <button 
-          className={`btn ${activeTab === 'playbooks' ? 'btn-primary' : ''}`}
+          className={`btn ${activeTab === 'playbooks' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('playbooks')}
-          style={{ whiteSpace: 'nowrap', background: activeTab === 'playbooks' ? 'var(--primary)' : 'transparent', color: activeTab === 'playbooks' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
+          role="tab"
+          aria-selected={activeTab === 'playbooks'}
         >
-          SOAR Playbooks
+          Playbooks
         </button>
         <button 
-          className={`btn ${activeTab === 'audit' ? 'btn-primary' : ''}`}
+          className={`btn ${activeTab === 'audit' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('audit')}
-          style={{ whiteSpace: 'nowrap', background: activeTab === 'audit' ? 'var(--primary)' : 'transparent', color: activeTab === 'audit' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
+          role="tab"
+          aria-selected={activeTab === 'audit'}
         >
-          Audit Logs
+          Audit
         </button>
         <button 
-          className={`btn ${activeTab === 'security' ? 'btn-primary' : ''}`}
-          onClick={() => setActiveTab('security')}
-          style={{ whiteSpace: 'nowrap', background: activeTab === 'security' ? 'var(--primary)' : 'transparent', color: activeTab === 'security' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
-        >
-          Security & MFA
-        </button>
-        <button 
-          className={`btn ${activeTab === 'system' ? 'btn-primary' : ''}`}
+          className={`btn ${activeTab === 'system' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('system')}
-          style={{ whiteSpace: 'nowrap', background: activeTab === 'system' ? 'var(--primary)' : 'transparent', color: activeTab === 'system' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
+          role="tab"
+          aria-selected={activeTab === 'system'}
         >
-          System Configuration
+          Integrations
         </button>
 
         {role === 'SUPER_ADMIN' && (
           <button 
-            className={`btn ${activeTab === 'tenants' ? 'btn-primary' : ''}`}
+            className={`btn ${activeTab === 'tenants' ? 'is-active' : ''}`}
             onClick={() => setActiveTab('tenants')}
-            style={{ whiteSpace: 'nowrap', background: activeTab === 'tenants' ? 'var(--primary)' : 'transparent', color: activeTab === 'tenants' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
+            role="tab"
+            aria-selected={activeTab === 'tenants'}
           >
-            Tenants (MSSP)
+            Tenants
           </button>
         )}
         {(role === 'SUPER_ADMIN' || role === 'TENANT_ADMIN') && (
           <button 
-            className={`btn ${activeTab === 'users' ? 'btn-primary' : ''}`}
+            className={`btn ${activeTab === 'users' ? 'is-active' : ''}`}
             onClick={() => setActiveTab('users')}
-            style={{ whiteSpace: 'nowrap', background: activeTab === 'users' ? 'var(--primary)' : 'transparent', color: activeTab === 'users' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
+            role="tab"
+            aria-selected={activeTab === 'users'}
           >
-            User Access
+            Users
           </button>
         )}
         <button 
-          className={`btn ${activeTab === 'sources' ? 'btn-primary' : ''}`}
+          className={`btn ${activeTab === 'sources' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('sources')}
-          style={{ whiteSpace: 'nowrap', background: activeTab === 'sources' ? 'var(--primary)' : 'transparent', color: activeTab === 'sources' ? 'white' : 'var(--text-secondary)', border: 'none', boxShadow: 'none' }}
+          role="tab"
+          aria-selected={activeTab === 'sources'}
         >
-          Data Sources
+          Sources
         </button>
       </div>
 
       {activeTab === 'detection' && (
         <div className="card" style={{ maxWidth: '800px' }}>
-          <h3 style={{ marginTop: 0 }}>Alert Suppression Rules</h3>
+          <h3 style={{ marginTop: 0 }}>Suppression rules</h3>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-            Alerts matching these rules will be quietly scored but will NOT generate a SIEM payload, Slack notification, or show up in the Triage Inbox.
+            Matching events remain scored for analysis but do not create analyst alerts or outbound notifications.
           </p>
 
           <form onSubmit={addRule} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
@@ -443,7 +454,7 @@ function Settings({ token }) {
 
       {activeTab === 'system' && (
         <div className="card" style={{ maxWidth: '800px' }}>
-          <h3 style={{ marginTop: 0 }}>System Integrations</h3>
+          <h3 style={{ marginTop: 0 }}>Integrations</h3>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
             Configure downstream systems for automated response.
           </p>
@@ -451,80 +462,9 @@ function Settings({ token }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'var(--bg-primary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
               <div>
                 <strong style={{ display: 'block', marginBottom: '0.25rem' }}>ServiceNow ITSM</strong>
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Automatically create incident tickets for confirmed quantum anomalies.</span>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Local adapter used by the demonstration environment.</span>
               </div>
-              <button className="btn btn-secondary" disabled>Configured (Mock)</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'security' && (
-        <div className="card" style={{ maxWidth: '800px' }}>
-          <h3 style={{ marginTop: 0 }}>Security & MFA</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '2rem' }}>
-            Configure Multi-Factor Authentication for your admin account.
-          </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-            <div style={{ padding: '1.5rem', background: 'var(--bg-primary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-                <div>
-                  <h4 style={{ margin: '0 0 0.5rem 0' }}>Authenticator App (TOTP)</h4>
-                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Use an app like Google Authenticator or Authy to generate a 6-digit code.</p>
-                </div>
-                <div>
-                  {mfaStatus.totp_enabled ? (
-                    <span style={{ color: 'var(--success)', fontWeight: 'bold', fontSize: '0.85rem' }}>Enabled</span>
-                  ) : (
-                    <span style={{ color: 'var(--warning)', fontWeight: 'bold', fontSize: '0.85rem' }}>Not Enabled</span>
-                  )}
-                </div>
-              </div>
-              
-              {!mfaStatus.totp_enabled && !qrCode && (
-                <button className="btn btn-secondary" onClick={setupTotp} disabled={loading}>
-                  Setup Authenticator
-                </button>
-              )}
-
-              {qrCode && (
-                <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', marginTop: '1rem', padding: '1rem', background: 'white', borderRadius: '8px' }}>
-                  <img src={`data:image/png;base64,${qrCode}`} alt="QR Code" style={{ width: '150px', height: '150px' }} />
-                  <form onSubmit={verifyTotp} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <p style={{ color: 'black', margin: 0, fontSize: '0.9rem' }}>Scan the QR code and enter the 6-digit code to verify:</p>
-                    <input 
-                      type="text" 
-                      value={totpCode}
-                      onChange={e => setTotpCode(e.target.value)}
-                      placeholder="000000"
-                      maxLength={6}
-                      style={{ padding: '0.5rem', fontSize: '1.2rem', letterSpacing: '0.25em', textAlign: 'center', borderRadius: '4px', border: '1px solid #ccc', color: 'black' }}
-                    />
-                    <button type="submit" className="btn btn-primary" disabled={loading || totpCode.length !== 6}>Verify & Enable</button>
-                  </form>
-                </div>
-              )}
-            </div>
-
-            <div style={{ padding: '1.5rem', background: 'var(--bg-primary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-                <div>
-                  <h4 style={{ margin: '0 0 0.5rem 0' }}>Hardware Security Keys (WebAuthn)</h4>
-                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Use a YubiKey, TouchID, or Windows Hello for frictionless security.</p>
-                </div>
-                <div>
-                  {mfaStatus.webauthn_enabled ? (
-                    <span style={{ color: 'var(--success)', fontWeight: 'bold', fontSize: '0.85rem' }}>Enabled</span>
-                  ) : (
-                    <span style={{ color: 'var(--text-secondary)', fontWeight: 'bold', fontSize: '0.85rem' }}>Not Configured</span>
-                  )}
-                </div>
-              </div>
-              
-              <button className="btn btn-primary" onClick={registerHardwareKey} disabled={loading}>
-                Register New Hardware Key
-              </button>
+              <span className="status-pill">Local adapter</span>
             </div>
           </div>
         </div>
@@ -539,8 +479,12 @@ function Settings({ token }) {
             <span style={{ color: 'var(--text-secondary)' }}>IF</span>
             <select className="form-control" value={pbField} onChange={e => setPbField(e.target.value)} style={{ padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)' }}>
               <option value="score">Ensemble Score</option>
+              <option value="ensemble">Ensemble</option>
+              <option value="quantum_kernel">Quantum kernel</option>
+              <option value="classical_svm">Classical SVM</option>
+              <option value="isolation_forest">Isolation Forest</option>
+              <option value="severity">Severity</option>
               <option value="attack_phase">Attack Phase</option>
-              <option value="cloud">Cloud Provider</option>
             </select>
             <select className="form-control" value={pbOp} onChange={e => setPbOp(e.target.value)} style={{ padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)' }}>
               <option value=">">&gt;</option>
@@ -639,7 +583,7 @@ function Settings({ token }) {
 }`}
           </pre>
           <p style={{ fontSize: '0.85rem', color: '#ef4444' }}>
-            Note: The Automated Exfiltration (DLP-Lite) engine automatically flags any event with >1GB of bytes_out as CRITICAL.
+            Note: The Automated Exfiltration (DLP-Lite) engine automatically flags any event with &gt;1GB of bytes_out as CRITICAL.
           </p>
         </div>
       )}
@@ -681,42 +625,215 @@ function Settings({ token }) {
       )}
 
       {activeTab === 'users' && (role === 'SUPER_ADMIN' || role === 'TENANT_ADMIN') && (
-        <div className="card" style={{ maxWidth: '800px' }}>
-          <h3 style={{ marginTop: 0 }}>User Access</h3>
-          <form onSubmit={createUser} style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
-            <input type="text" className="form-control" placeholder="Username" value={newUsername} onChange={e => setNewUsername(e.target.value)} required />
-            <input type="password" className="form-control" placeholder="Password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
-            <select className="form-control" value={newUserRole} onChange={e => setNewUserRole(e.target.value)}>
-              <option value="TIER_1">Tier 1 Analyst</option>
-              <option value="TIER_2">Tier 2 Analyst</option>
-              <option value="READ_ONLY">Read Only</option>
-              {role === 'SUPER_ADMIN' && <option value="TENANT_ADMIN">Tenant Admin</option>}
-            </select>
-            {role === 'SUPER_ADMIN' && (
-              <select className="form-control" value={newUserTenant} onChange={e => setNewUserTenant(e.target.value)} required>
-                <option value="">Select Tenant...</option>
-                {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        <div className="card" style={{ maxWidth: '1100px' }}>
+          <h3 style={{ marginTop: 0 }}>User accounts</h3>
+          <p className="settings-hint" style={{ marginBottom: '1.5rem' }}>
+            Create accounts, change roles, reset credentials, and revoke access. Deactivating an account blocks it
+            immediately, including any session that is already signed in.
+          </p>
+
+          <form onSubmit={createUser} className="user-create-form">
+            <div className="user-create-field">
+              <label className="control-label" htmlFor="new-username">Username</label>
+              <input
+                id="new-username"
+                type="text"
+                className="form-control"
+                autoComplete="off"
+                value={newUsername}
+                onChange={e => setNewUsername(e.target.value)}
+                required
+              />
+            </div>
+            <div className="user-create-field">
+              <label className="control-label" htmlFor="new-user-password">Initial password</label>
+              <input
+                id="new-user-password"
+                type="password"
+                className="form-control"
+                autoComplete="new-password"
+                minLength={MIN_PASSWORD_LENGTH}
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                required
+              />
+            </div>
+            <div className="user-create-field">
+              <label className="control-label" htmlFor="new-user-role">Role</label>
+              <select id="new-user-role" className="form-control" value={newUserRole} onChange={e => setNewUserRole(e.target.value)}>
+                {assignableRoles(role).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
               </select>
+            </div>
+            {role === 'SUPER_ADMIN' && (
+              <div className="user-create-field">
+                <label className="control-label" htmlFor="new-user-tenant">Tenant</label>
+                <select id="new-user-tenant" className="form-control" value={newUserTenant} onChange={e => setNewUserTenant(e.target.value)} required>
+                  <option value="">Select tenant...</option>
+                  {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
             )}
-            <button type="submit" className="btn btn-primary" disabled={loading}>Create User</button>
+            <button type="submit" className="btn btn-primary" disabled={loading}>Create user</button>
+            <span className="settings-hint">Passwords must be at least {MIN_PASSWORD_LENGTH} characters.</span>
           </form>
-          <table className="table" style={{ width: '100%', textAlign: 'left' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <th>ID</th><th>Username</th><th>Role</th><th>Tenant ID</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map(u => (
-                <tr key={u.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                  <td style={{ padding: '1rem 0' }}>{u.id}</td>
-                  <td>{u.username}</td>
-                  <td>{u.role}</td>
-                  <td>{u.tenant_id}</td>
+
+          <div className="table-wrap">
+            <table className="user-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  {role === 'SUPER_ADMIN' && <th>Tenant</th>}
+                  <th>MFA</th>
+                  <th>Status</th>
+                  <th>Last sign-in</th>
+                  <th className="align-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {users.length === 0 ? (
+                  <tr>
+                    <td colSpan={role === 'SUPER_ADMIN' ? 7 : 6} className="user-table-empty">
+                      {usersLoaded ? 'No users yet.' : 'Loading users...'}
+                    </td>
+                  </tr>
+                ) : users.map(u => {
+                  const isSelf = u.username === currentUsername;
+                  const busy = busyUserId === u.id;
+                  return (
+                    <React.Fragment key={u.id}>
+                      <tr className={u.is_active ? undefined : 'is-inactive'}>
+                        <td>
+                          <span className="user-name">{u.username}</span>
+                          {isSelf && <span className="status-pill" style={{ marginLeft: '0.5rem' }}>You</span>}
+                        </td>
+                        <td>
+                          {u.manageable ? (
+                            <select
+                              className="form-control user-role-select"
+                              value={u.role}
+                              disabled={busy}
+                              aria-label={`Role for ${u.username}`}
+                              onChange={e => changeUserRole(u, e.target.value)}
+                            >
+                              {assignableRoles(role).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                            </select>
+                          ) : (
+                            <span>{ROLE_LABELS[u.role] || u.role}</span>
+                          )}
+                        </td>
+                        {role === 'SUPER_ADMIN' && (
+                          <td>
+                            {u.manageable ? (
+                              <select
+                                className="form-control user-role-select"
+                                value={u.tenant_id}
+                                disabled={busy}
+                                aria-label={`Tenant for ${u.username}`}
+                                onChange={e => changeUserTenant(u, e.target.value)}
+                              >
+                                {tenants.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                              </select>
+                            ) : (
+                              <span>{tenants.find(t => t.id === u.tenant_id)?.name || `Tenant ${u.tenant_id}`}</span>
+                            )}
+                          </td>
+                        )}
+                        <td>
+                          {u.mfa_enabled
+                            ? <span className="status-pill is-success">Enrolled</span>
+                            : <span className="settings-hint">Not enrolled</span>}
+                        </td>
+                        <td>
+                          <span className={`status-pill ${u.is_active ? 'is-success' : 'is-danger'}`}>
+                            {u.is_active ? 'Active' : 'Disabled'}
+                          </span>
+                        </td>
+                        <td className="settings-hint">
+                          {u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never'}
+                        </td>
+                        <td>
+                          {u.manageable ? (
+                            <div className="user-actions">
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-compact"
+                                disabled={busy}
+                                onClick={() => {
+                                  setUserActionPassword('');
+                                  setUserAction(prev => (prev?.id === u.id && prev.kind === 'password' ? null : { id: u.id, kind: 'password' }));
+                                }}
+                              >
+                                Reset password
+                              </button>
+                              {u.mfa_enabled && (
+                                <button type="button" className="btn btn-secondary btn-compact" disabled={busy} onClick={() => resetUserMfa(u)}>
+                                  Clear MFA
+                                </button>
+                              )}
+                              <button type="button" className="btn btn-secondary btn-compact" disabled={busy} onClick={() => toggleUserActive(u)}>
+                                {u.is_active ? 'Deactivate' : 'Activate'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-danger btn-compact"
+                                disabled={busy}
+                                onClick={() => setUserAction(prev => (prev?.id === u.id && prev.kind === 'delete' ? null : { id: u.id, kind: 'delete' }))}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="settings-hint">
+                              {isSelf ? 'Manage your own credentials under My account' : 'Super admin only'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                      {userAction?.id === u.id && (
+                        <tr className="user-action-row">
+                          <td colSpan={role === 'SUPER_ADMIN' ? 7 : 6}>
+                            {userAction.kind === 'password' ? (
+                              <form className="user-action-form" onSubmit={e => submitUserPassword(e, u)}>
+                                <label className="control-label" htmlFor={`reset-${u.id}`}>
+                                  New password for {u.username}
+                                </label>
+                                <input
+                                  id={`reset-${u.id}`}
+                                  type="password"
+                                  className="form-control"
+                                  autoComplete="new-password"
+                                  autoFocus
+                                  minLength={MIN_PASSWORD_LENGTH}
+                                  value={userActionPassword}
+                                  onChange={e => setUserActionPassword(e.target.value)}
+                                  required
+                                />
+                                <button type="submit" className="btn btn-primary btn-compact" disabled={busy}>Set password</button>
+                                <button type="button" className="btn btn-secondary btn-compact" onClick={closeUserAction}>Cancel</button>
+                                <span className="settings-hint">The user is not notified — share it over a trusted channel.</span>
+                              </form>
+                            ) : (
+                              <div className="user-action-form">
+                                <span>
+                                  Delete <strong>{u.username}</strong> permanently? Their case assignments are cleared and
+                                  past comments remain in the case history. Deactivate instead to keep the account recoverable.
+                                </span>
+                                <button type="button" className="btn btn-danger btn-compact" disabled={busy} onClick={() => deleteUser(u)}>
+                                  Delete account
+                                </button>
+                                <button type="button" className="btn btn-secondary btn-compact" onClick={closeUserAction}>Cancel</button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

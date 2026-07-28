@@ -341,8 +341,11 @@ def generate_mock_stream(
     rng = random.Random(seed)
     parser = MultiCloudLogParser()
     anomaly_indices = set()
-    target_anomalies = max(1, int(round(num_events * anomaly_rate)))
-    while len(anomaly_indices) < target_anomalies and len(anomaly_indices) < num_events:
+    # Do not force at least one anomaly — single-event pulls (num_events=1) would
+    # otherwise always be anomalous and skew the live stream (~86% attack rate).
+    target_anomalies = int(round(num_events * anomaly_rate))
+    target_anomalies = max(0, min(target_anomalies, num_events))
+    while len(anomaly_indices) < target_anomalies:
         anomaly_indices.add(rng.randint(0, num_events - 1))
 
     logger.info(

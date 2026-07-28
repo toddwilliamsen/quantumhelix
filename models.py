@@ -1,4 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from werkzeug.security import generate_password_hash, check_password_hash
 import datetime
 
@@ -10,19 +11,48 @@ class Tenant(db.Model):
     name = db.Column(db.String(100), nullable=False)
     compliance_mode_enabled = db.Column(db.Boolean, default=False)
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "compliance_mode_enabled": bool(self.compliance_mode_enabled),
+        }
+
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
+    password_hash = db.Column(db.Text, nullable=False)
     role = db.Column(db.String(20), nullable=False, default='TIER_1') # SUPER_ADMIN, TENANT_ADMIN, TIER_1, TIER_2, READ_ONLY
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    token_version = db.Column(db.Integer, nullable=False, default=0)
+    must_change_password = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    last_login_at = db.Column(db.DateTime, nullable=True)
 
-    def set_password(self, password):
+    def set_password(self, password, *, require_change=False):
         self.password_hash = generate_password_hash(password)
+        self.token_version = int(self.token_version or 0) + 1
+        self.must_change_password = bool(require_change)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def bump_token_version(self):
+        self.token_version = int(self.token_version or 0) + 1
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "role": self.role,
+            "tenant_id": self.tenant_id,
+            "is_active": bool(self.is_active),
+            "must_change_password": bool(self.must_change_password),
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "last_login_at": self.last_login_at.isoformat() + "Z" if self.last_login_at else None,
+        }
 
 class UserSecurity(db.Model):
     __tablename__ = 'user_security'
@@ -48,16 +78,25 @@ class IncidentCase(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Open') # Open, Pending, Resolved
     assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     priority = db.Column(db.String(20), nullable=False, default='Medium')
+    peak_framework = db.Column(db.Text, nullable=True)
+    kill_chain = db.Column(db.Text, nullable=True)
+    diamond_model = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    tenant = db.relationship('Tenant', lazy='joined')
 
     def to_dict(self):
         return {
             "id": self.id,
             "tenant_id": self.tenant_id,
+            "tenant_name": self.tenant.name if self.tenant else None,
             "title": self.title,
             "status": self.status,
             "assignee_id": self.assignee_id,
             "priority": self.priority,
+            "peak_framework": self.peak_framework,
+            "kill_chain": self.kill_chain,
+            "diamond_model": self.diamond_model,
             "created_at": self.created_at.isoformat() + "Z"
         }
 
@@ -100,21 +139,25 @@ class Alert(db.Model):
     classical_svm = db.Column(db.Float, nullable=False)
     isolation_forest = db.Column(db.Float, nullable=False)
     plain_english = db.Column(db.Text, nullable=False)
-    actions = db.Column(db.JSON, nullable=False) # store list as JSON
+    actions = db.Column(MutableList.as_mutable(db.JSON), nullable=False) # store list as JSON
     disagreement = db.Column(db.Text, nullable=True)
     attack_phase = db.Column(db.String(50), nullable=True) # Initial Access, Discovery, Credential Access, Exfiltration
-    siem = db.Column(db.JSON, nullable=False)
+    siem = db.Column(MutableDict.as_mutable(db.JSON), nullable=False)
     itsm_ticket = db.Column(db.String(50), nullable=True)
-    feature_contributions = db.Column(db.JSON, nullable=True)
-    linked_identities = db.Column(db.JSON, nullable=True)
+    feature_contributions = db.Column(MutableDict.as_mutable(db.JSON), nullable=True)
+    linked_identities = db.Column(MutableList.as_mutable(db.JSON), nullable=True)
     latency_ms = db.Column(db.Float, nullable=True, default=0.0)
     auto_response = db.Column(db.String(200), nullable=True)
+    assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow, index=True)
+
+    tenant = db.relationship('Tenant', lazy='joined')
 
     def to_dict(self):
         return {
             "id": self.id,
             "tenant_id": self.tenant_id,
+            "tenant_name": self.tenant.name if self.tenant else None,
             "case_id": self.case_id,
             "status": self.status,
             "severity": self.severity,
@@ -137,6 +180,7 @@ class Alert(db.Model):
             "linked_identities": self.linked_identities,
             "latency_ms": self.latency_ms,
             "auto_response": self.auto_response,
+            "assignee_id": self.assignee_id,
             "timestamp": self.timestamp.isoformat() + "Z"
         }
 

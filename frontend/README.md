@@ -1,16 +1,38 @@
-# React + Vite
+# Quantum Helix frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite SPA for the SOC console. Talks to the Flask API in `app.py` / `routes.py`.
 
-Currently, two official plugins are available:
+## Develop
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From the repo root, start the API, then:
 
-## React Compiler
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Vite proxies `/api` to `http://127.0.0.1:8000` (see `vite.config.js`).
 
-## Expanding the Oxlint configuration
+Default sign-in after first backend start: `admin` / `quantum123` (or `ADMIN_PASSWORD`).
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+## Scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm run dev` | Local UI with HMR |
+| `npm run build` | Production bundle → `frontend/dist` (also copy/serve via Flask `static/`) |
+| `npm run lint` | Oxlint |
+| `npm run preview` | Preview the production build |
+
+## Surfaces that matter for access control
+
+| Route | Who | Purpose |
+|-------|-----|---------|
+| `/account` | All signed-in roles | Change password; enroll TOTP / WebAuthn |
+| `/settings` | `SUPER_ADMIN`, `TENANT_ADMIN` | Administration (Users, tenants, playbooks, audit, …) |
+
+Shared role vocabulary lives in `src/roles.js`. API helpers live in `src/api.js`.
+
+Operator docs: [User Guide — React SOC dashboard](../docs/USER_GUIDE.md#33-react-soc-dashboard-poc).
+API docs: [Auth & users](../docs/API_REFERENCE.md#auth--users).

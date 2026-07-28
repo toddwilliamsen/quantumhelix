@@ -34,13 +34,15 @@ source .venv/bin/activate          # macOS / Linux
 python validate.py                 # loud-attack pipeline check
 python benchmark.py                # classical vs quantum-kernel scoreboard
 python cli.py scan --duration 10 --threshold 0.70 --engine ensemble
-python api.py                      # start the Flask API backend
+python app.py                      # start the Flask API backend (port 8000)
 cd frontend && npm run dev         # start the React SOC dashboard
 python main.py --events 50         # orchestration path (QNN demo)
 
 # Optional: deploy dummy Azure telemetry into your subscription
 ./azure/deploy_dummy_data.sh
 ```
+
+Default console login after first `app.py` start: **`admin` / `quantum123`** (override with `ADMIN_PASSWORD`). Open **Administration → Users** to create analyst accounts, assign roles, reset passwords, clear MFA, or deactivate users. Every signed-in user can manage their own password and MFA under **My account**.
 
 **Requirements:** Python **3.11+**, pip, and a terminal (bash / zsh / Git Bash / WSL).
 
@@ -62,16 +64,16 @@ Weekly GitHub Dependabot PRs and a Dependencies workflow also watch PyPI. See [d
 
 | Document | Audience | Description |
 |----------|----------|-------------|
-| [User Guide](docs/USER_GUIDE.md) | Analysts & operators | How to install, run CLI/GUI, interpret scores and alerts |
+| [User Guide](docs/USER_GUIDE.md) | Analysts & operators | Install, run CLI/GUI, roles, user management, interpret scores |
 | [PoC+ Status](docs/POC_PLUS.md) | Product / security eng | What is implemented beyond MVP |
-| [Architecture](docs/ARCHITECTURE.md) | Architects & engineers | System design, ensemble, quantum kernel, scale-out |
+| [Architecture](docs/ARCHITECTURE.md) | Architects & engineers | System design, ensemble, quantum kernel, app RBAC |
 | [Dependencies](docs/DEPENDENCIES.md) | Maintainers | Latest-stable pin policy, watcher, Dependabot |
-| [API Reference](docs/API_REFERENCE.md) | Developers | Modules, classes, methods, and CLI flags |
+| [API Reference](docs/API_REFERENCE.md) | Developers | Modules, auth/user APIs, CLI flags |
 | [CIM Reference](docs/CIM.md) | Integrators | Common Information Model field mapping (AWS / Azure) |
 | [Validation Guide](docs/VALIDATION.md) | QA / security eng | Automated verification of clean vs. attack traffic |
 | [Azure Dummy Data](docs/AZURE_DUMMY_DATA.md) | Azure testers | Deploy test telemetry into an Azure subscription |
-| [Operations & Troubleshooting](docs/OPERATIONS.md) | SRE / SOC eng | Logging, backends, known limits, production checklist |
-
+| [Operations & Troubleshooting](docs/OPERATIONS.md) | SRE / SOC eng | Bootstrap admin, access control, production checklist |
+| [Glossary](docs/GLOSSARY.md) | All readers | Security and QML terms, including console RBAC |
 ---
 
 ## Project layout
@@ -83,9 +85,10 @@ quantum/
 ├── quantum_engine.py     # PennyLane QNN threat detector
 ├── alerter.py            # ASFF / CEF / Slack alert orchestration
 ├── cli.py                # Click CLI (`Quantum Helix scan`)
-├── models.py             # SQLite database models (User, Alert, HistoryEvent)
-├── api.py                # Flask Backend API (REST + SSE)
-├── frontend/             # React SPA Dashboard (Vite)
+├── models.py             # SQLite models (User, Tenant, Alert, Case, AuditLog, …)
+├── app.py                # Flask app entry (SQLite bootstrap, static SPA, background loop)
+├── routes.py             # REST + SSE blueprint (auth, users, alerts, cases, MFA)
+├── frontend/             # React SPA Dashboard (Vite) — My account + Administration
 ├── classical_baselines.py # Isolation Forest + RBF SVM control group
 ├── quantum_kernel.py     # PennyLane fidelity kernel + QSVM
 ├── ensemble.py           # HybridThreatEnsemble (default scan engine)

@@ -5,7 +5,7 @@ const CMDBWidget = ({ selectedIdentity, cmdbData, getSeverityColor, getSeverityL
   if (!selectedIdentity) return null;
 
   return (
-    <div style={{ width: '400px', background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column' }}>
+    <div className="cmdb-panel" style={{ width: '400px', background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
           <Activity size={20} color={getSeverityColor(selectedIdentity.maxScore)} />
@@ -40,23 +40,15 @@ const CMDBWidget = ({ selectedIdentity, cmdbData, getSeverityColor, getSeverityL
           </div>
         )}
         
-        <button 
-          className="btn"
-          onClick={() => handleCutOff(selectedIdentity.identity)}
-          style={{ 
-            width: '100%', 
-            background: '#ef4444', 
-            color: 'white', 
-            border: 'none', 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            gap: '0.5rem',
-            padding: '0.75rem'
-          }}
-        >
-          Contain Identity (Cut Off)
-        </button>
+        {handleCutOff && (
+          <button
+            className="btn btn-danger"
+            onClick={() => handleCutOff(selectedIdentity.identity)}
+            style={{ width: '100%' }}
+          >
+            Contain identity
+          </button>
+        )}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>

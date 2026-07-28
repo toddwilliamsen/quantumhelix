@@ -1,15 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { useSearchParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Search, Download } from 'lucide-react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Search, Download, Briefcase } from 'lucide-react';
 import toast from 'react-hot-toast';
 import InfoBubble from '../components/InfoBubble';
+import EventDrillDownModal from '../components/EventDrillDownModal';
+import IntrusionExplanation from '../components/IntrusionExplanation';
+import { apiFetch } from '../api';
+import { canMutateAlerts } from '../roles';
 
 const ScoreBar = ({ label, score, threshold }) => {
   const percentage = Math.min(Math.max(score * 100, 0), 100);
   let color = 'var(--success)';
   if (score >= threshold) color = 'var(--danger)';
-  else if (score >= threshold * 0.7) color = '#f59e0b'; // amber
+  else if (score >= threshold * 0.7) color = '#f59e0b';
 
   return (
     <div style={{ marginBottom: '1rem' }}>
@@ -25,57 +29,125 @@ const ScoreBar = ({ label, score, threshold }) => {
 };
 
 function TriageInbox({ state, token }) {
+  const role = localStorage.getItem('quantum_role');
+  const canMutate = canMutateAlerts(role);
+  const isMspAdmin = role === 'SUPER_ADMIN';
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const alertIdParam = searchParams.get('alertId');
 
   const [alerts, setAlerts] = useState([]);
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const [modalAlert, setModalAlert] = useState(null);
   const [filter, setFilter] = useState('open');
+  const [assigneeFilter, setAssigneeFilter] = useState('');
+  const [tenantFilter, setTenantFilter] = useState('');
+  const [tenants, setTenants] = useState([]);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [cases, setCases] = useState([]);
+  const [linkCaseId, setLinkCaseId] = useState('');
+  const searchTimer = useRef(null);
+
+  const appendTenantScope = (params) => {
+    if (!isMspAdmin) return params;
+    params.append('scope', 'all');
+    if (tenantFilter) params.append('tenant_id', tenantFilter);
+    return params;
+  };
 
   useEffect(() => {
-    fetchAlerts();
-  }, [filter, page, search, startDate, endDate, state.open_alerts]); // Re-fetch when global open_alerts changes (SSE)
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(searchTimer.current);
+  }, [searchInput]);
 
   useEffect(() => {
-    if (alertIdParam && token) {
-      // Fetch specific alert to auto-select
-      fetch(`/api/alert/${alertIdParam}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      .then(r => r.json())
+    if (!isMspAdmin || !token) return undefined;
+    const controller = new AbortController();
+    apiFetch('/api/tenants', { token, signal: controller.signal })
+      .then((data) => setTenants(Array.isArray(data) ? data : []))
+      .catch(() => {});
+    return () => controller.abort();
+  }, [isMspAdmin, token]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const params = appendTenantScope(new URLSearchParams({
+          page, limit: 10, status: filter, search
+        }));
+        if (assigneeFilter) params.append('assignee', assigneeFilter);
+        if (startDate) params.append('start_date', startDate + "T00:00:00Z");
+        if (endDate) params.append('end_date', endDate + "T23:59:59Z");
+
+        const data = await apiFetch(`/api/alerts?${params.toString()}`, {
+          token,
+          signal: controller.signal,
+        });
+        setAlerts(data.alerts || []);
+        setTotalPages(data.pages || 1);
+
+        setSelectedAlert(prev => {
+          if (alertIdParam) return prev;
+          if (prev) {
+            const refreshed = (data.alerts || []).find(a => a.id === prev.id);
+            return refreshed || prev;
+          }
+          return (data.alerts && data.alerts[0]) || null;
+        });
+      } catch (e) {
+        if (e.name !== 'AbortError') console.error(e);
+      }
+    };
+    load();
+    return () => controller.abort();
+  }, [filter, assigneeFilter, page, search, startDate, endDate, state.open_alerts, token, alertIdParam, isMspAdmin, tenantFilter]);
+
+  useEffect(() => {
+    if (!alertIdParam || !token) return undefined;
+    const controller = new AbortController();
+    const qs = isMspAdmin ? '?scope=all' : '';
+    apiFetch(`/api/alert/${alertIdParam}${qs}`, { token, signal: controller.signal })
       .then(data => {
         if (!data.message) {
           setSelectedAlert(data);
-          setFilter(data.status); // Auto-switch filter to match the alert's status
+          setModalAlert(data);
+          setFilter(data.status || 'all');
         }
-      });
-    }
-  }, [alertIdParam, token]);
+      })
+      .catch(e => { if (e.name !== 'AbortError') console.error(e); });
+    return () => controller.abort();
+  }, [alertIdParam, token, isMspAdmin]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    appendTenantScope(params);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    apiFetch(`/api/cases${qs}`, { token })
+      .then(setCases)
+      .catch(() => {});
+  }, [token, isMspAdmin, tenantFilter]);
 
   const fetchAlerts = async () => {
     try {
-      const params = new URLSearchParams({
+      const params = appendTenantScope(new URLSearchParams({
         page, limit: 10, status: filter, search
-      });
+      }));
+      if (assigneeFilter) params.append('assignee', assigneeFilter);
       if (startDate) params.append('start_date', startDate + "T00:00:00Z");
       if (endDate) params.append('end_date', endDate + "T23:59:59Z");
-      
-      const res = await fetch(`/api/alerts?${params.toString()}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
+      const data = await apiFetch(`/api/alerts?${params.toString()}`, { token });
       setAlerts(data.alerts || []);
       setTotalPages(data.pages || 1);
-      
-      // If we don't have a selected alert, select the first one
-      if (!selectedAlert && data.alerts && data.alerts.length > 0 && !alertIdParam) {
-        setSelectedAlert(data.alerts[0]);
-      }
     } catch (e) {
       console.error(e);
     }
@@ -83,86 +155,159 @@ function TriageInbox({ state, token }) {
 
   const handleAction = async (alertId, action) => {
     try {
-      const res = await fetch(`/api/alert/${alertId}/action?action=${action}`, {
+      const data = await apiFetch(`/api/alert/${alertId}/action?action=${action}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        token,
       });
-      if (res.ok) {
-        const data = await res.json();
-        // Update the selected alert status in view
-        setSelectedAlert(data.alert);
-        fetchAlerts();
-        toast.success(`Alert marked as ${action.replace('_', ' ')}`);
-      } else {
-        toast.error('Failed to update alert');
+      setSelectedAlert(data.alert);
+      if (modalAlert?.id === alertId) setModalAlert(data.alert);
+      fetchAlerts();
+      if (action === 'escalate' && data.case_id) {
+        toast.success(data.message || `Escalated to CASE-${String(data.case_id).padStart(4, '0')}`);
+        navigate(`/cases?caseId=${data.case_id}`);
+        return data;
       }
+      toast.success(`Alert marked as ${action.replace('_', ' ')}`);
+      return data;
     } catch (e) {
       console.error(e);
-      toast.error('An error occurred');
+      toast.error(e.message || 'Failed to update alert');
+      throw e;
     }
   };
 
-  const handleExport = () => {
-    const params = new URLSearchParams({ status: filter, search });
+  const handleLinkToCase = async () => {
+    if (!selectedAlert || !linkCaseId) {
+      toast.error('Select a case first');
+      return;
+    }
+    try {
+      await apiFetch(`/api/cases/${linkCaseId}/alerts`, {
+        method: 'POST',
+        token,
+        json: { alert_id: selectedAlert.id },
+      });
+      toast.success(`Alert linked to CASE-${String(linkCaseId).padStart(4, '0')}`);
+      setSelectedAlert({ ...selectedAlert, case_id: Number(linkCaseId) });
+    } catch (e) {
+      toast.error(e.message || 'Failed to link alert');
+    }
+  };
+
+  const handleExport = async () => {
+    const params = appendTenantScope(new URLSearchParams({ status: filter, search }));
+    if (assigneeFilter) params.append('assignee', assigneeFilter);
     if (startDate) params.append('start_date', startDate + "T00:00:00Z");
     if (endDate) params.append('end_date', endDate + "T23:59:59Z");
-    
-    window.open(`/api/alerts/export?${params.toString()}`, '_blank');
+    try {
+      const res = await fetch(`/api/alerts/export?${params.toString()}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'alerts_export.csv';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (e) {
+      console.error(e);
+      toast.error('Failed to export alerts');
+    }
+  };
+
+  const getSeverityColor = (score) => {
+    if (score >= 0.85) return 'var(--danger)';
+    if (score >= state.threshold) return '#f59e0b';
+    return 'var(--success)';
   };
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div className="page-header" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <h1 className="page-title">Triage Inbox</h1>
-          <p className="page-subtitle">Select an alert on the left to see what happened and what to do next.</p>
+          <h1 className="page-title">Triage</h1>
+          <p className="page-subtitle">Review, classify, and route alerts requiring analyst attention.</p>
         </div>
         
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <div className="page-actions">
           <input 
             type="date"
             className="form-control"
+            aria-label="Start date"
             value={startDate}
             onChange={e => { setStartDate(e.target.value); setPage(1); }}
-            style={{ padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)', background: 'var(--surface)', color: 'var(--text-primary)' }}
           />
           <span style={{ color: 'var(--text-secondary)' }}>to</span>
           <input 
             type="date"
             className="form-control"
+            aria-label="End date"
             value={endDate}
             onChange={e => { setEndDate(e.target.value); setPage(1); }}
-            style={{ padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)', background: 'var(--surface)', color: 'var(--text-primary)' }}
           />
           
-          <div style={{ display: 'flex', alignItems: 'center', background: 'var(--surface)', padding: '0.5rem 1rem', borderRadius: '0.5rem', border: '1px solid var(--border-color)', width: '250px' }}>
-            <Search size={16} color="var(--text-secondary)" style={{ marginRight: '0.5rem' }} />
+          <div className="search-field">
+            <Search size={15} />
             <input 
               type="text" 
-              placeholder="Search..." 
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              style={{ border: 'none', outline: 'none', background: 'transparent', width: '100%', color: 'var(--text-primary)' }}
+              placeholder="Search identity, IP, or cloud"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              aria-label="Search alerts"
             />
           </div>
+          {isMspAdmin && (
+            <select
+              className="form-control"
+              aria-label="Filter by tenant"
+              value={tenantFilter}
+              onChange={(e) => { setTenantFilter(e.target.value); setPage(1); }}
+              style={{ maxWidth: '220px' }}
+            >
+              <option value="">All tenants</option>
+              {tenants.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 
-      <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: '1rem' }}>
-        {['open', 'all', 'acknowledged', 'false_positive', 'escalated'].map(f => (
-          <label key={f} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', textTransform: 'capitalize' }}>
-            <input 
-              type="radio" 
-              name="filter" 
-              checked={filter === f} 
-              onChange={() => { setFilter(f); setPage(1); }} 
-            />
-            {f.replace('_', ' ')}
-          </label>
-        ))}
+      <div className="toolbar">
+        <div className="segmented-control" aria-label="Alert status filter">
+          {['open', 'all', 'acknowledged', 'false_positive', 'escalated'].map(f => (
+            <button
+              key={f}
+              type="button"
+              className={filter === f && !assigneeFilter ? 'is-active' : ''}
+              aria-pressed={filter === f && !assigneeFilter}
+              onClick={() => { setFilter(f); setAssigneeFilter(''); setPage(1); }}
+            >
+              {f.replace('_', ' ')}
+            </button>
+          ))}
+          <button
+            type="button"
+            className={assigneeFilter === 'me' ? 'is-active' : ''}
+            aria-pressed={assigneeFilter === 'me'}
+            onClick={() => { setAssigneeFilter('me'); setFilter('all'); setPage(1); }}
+          >
+            My queue
+          </button>
+          <button
+            type="button"
+            className={assigneeFilter === 'unassigned' ? 'is-active' : ''}
+            aria-pressed={assigneeFilter === 'unassigned'}
+            onClick={() => { setAssigneeFilter('unassigned'); setFilter('open'); setPage(1); }}
+          >
+            Unassigned
+          </button>
         </div>
-        <button className="btn btn-secondary" onClick={handleExport} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem 0.75rem' }}>
+        <button className="btn btn-secondary" onClick={handleExport}>
           <Download size={16} /> Export CSV
         </button>
       </div>
@@ -175,23 +320,33 @@ function TriageInbox({ state, token }) {
             </div>
           ) : (
             alerts.map(alert => (
-              <div 
+              <button
+                type="button"
                 key={alert.id}
                 className={`alert-item ${alert.status !== 'open' ? 'acked' : ''} ${selectedAlert?.id === alert.id ? 'active' : ''}`}
-                onClick={() => { setSelectedAlert(alert); setSearchParams({}); }} // Clear search params when manually selecting
+                onClick={() => { setSelectedAlert(alert); setSearchParams({}); }}
               >
                 <div className="alert-item-header">
                   <span>{alert.severity} • {alert.cloud}</span>
                   <span>{alert.score.toFixed(2)}</span>
                 </div>
+                {alert.tenant_name && (
+                  <div className="tenant-chip" title={`Tenant ID ${alert.tenant_id}`}>
+                    {alert.tenant_name}
+                  </div>
+                )}
                 <div className="alert-item-body">
                   {alert.short_identity}
                 </div>
-              </div>
+                {alert.assignee_id && (
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                    Assigned
+                  </div>
+                )}
+              </button>
             ))
           )}
           
-          {/* Pagination Controls */}
           {totalPages > 1 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0.5rem', marginTop: 'auto' }}>
               <button 
@@ -222,24 +377,29 @@ function TriageInbox({ state, token }) {
                 <div>
                   <div style={{ color: 'var(--danger)', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em', marginBottom: '0.5rem', textTransform: 'uppercase' }}>
                     {selectedAlert.severity} • {selectedAlert.cloud} • {selectedAlert.status.replace('_', ' ')}
+                    {selectedAlert.attack_phase ? ` • ${selectedAlert.attack_phase}` : ''}
                   </div>
+                  {selectedAlert.tenant_name && (
+                    <div className="tenant-chip tenant-chip--lg" style={{ marginBottom: '0.65rem' }}>
+                      Tenant: {selectedAlert.tenant_name}
+                    </div>
+                  )}
                   <h3 className="detail-title">{selectedAlert.short_identity}</h3>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                     Full identity: {selectedAlert.identity} <br/> Source IP: {selectedAlert.source_ip}
                   </div>
                 </div>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', textAlign: 'right' }}>
                   {new Date(selectedAlert.timestamp).toLocaleString()}
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <button type="button" className="btn btn-secondary" onClick={() => setModalAlert(selectedAlert)}>
+                      Full investigation
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <h4 style={{ marginTop: 0, display: 'flex', alignItems: 'center' }}>
-                What happened (plain English)
-                <InfoBubble text="A human-readable summary of the anomalous behavior detected." />
-              </h4>
-              <p style={{ lineHeight: 1.6, color: 'var(--text-primary)' }}>
-                {selectedAlert.plain_english}
-              </p>
+              <IntrusionExplanation alert={selectedAlert} />
 
               <div className="action-box">
                 <h4 style={{ display: 'flex', alignItems: 'center' }}>
@@ -247,17 +407,59 @@ function TriageInbox({ state, token }) {
                   <InfoBubble text="Actionable steps for analysts to investigate and remediate the threat." />
                 </h4>
                 <ul>
-                  {selectedAlert.actions.map((act, i) => <li key={i}>{act}</li>)}
+                  {(selectedAlert.actions || []).map((act, i) => <li key={i}>{act}</li>)}
                 </ul>
               </div>
 
-              {selectedAlert.status === 'open' && (
+              {canMutate && (
                 <div className="button-group">
-                  <button className="btn btn-primary" onClick={() => handleAction(selectedAlert.id, 'acknowledge')}>Acknowledge</button>
-                  <button className="btn btn-secondary" onClick={() => handleAction(selectedAlert.id, 'false_positive')}>Mark False Positive</button>
-                  <button className="btn btn-danger" onClick={() => handleAction(selectedAlert.id, 'escalate')}>Escalate</button>
+                  {!selectedAlert.assignee_id && (
+                    <button className="btn btn-secondary" onClick={() => handleAction(selectedAlert.id, 'claim')}>Claim</button>
+                  )}
+                  {selectedAlert.assignee_id && (
+                    <button className="btn btn-secondary" onClick={() => handleAction(selectedAlert.id, 'release')}>Release</button>
+                  )}
+                  {selectedAlert.status === 'open' && (
+                    <>
+                      <button className="btn btn-primary" onClick={() => handleAction(selectedAlert.id, 'acknowledge')}>Acknowledge</button>
+                      <button className="btn btn-secondary" onClick={() => handleAction(selectedAlert.id, 'false_positive')}>Mark False Positive</button>
+                      <button className="btn btn-danger" onClick={() => handleAction(selectedAlert.id, 'escalate')}>Escalate to case</button>
+                    </>
+                  )}
+                  {selectedAlert.status === 'acknowledged' && (
+                    <button className="btn btn-danger" onClick={() => handleAction(selectedAlert.id, 'escalate')}>Escalate to case</button>
+                  )}
                 </div>
               )}
+
+              {canMutate && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+                <Briefcase size={16} color="var(--text-secondary)" />
+                <select
+                  className="form-control"
+                  value={linkCaseId}
+                  onChange={(e) => setLinkCaseId(e.target.value)}
+                  aria-label="Link alert to case"
+                  style={{ maxWidth: '220px' }}
+                >
+                  <option value="">Add to case…</option>
+                  {cases.map(c => (
+                    <option key={c.id} value={c.id}>CASE-{String(c.id).padStart(4, '0')}: {c.title}</option>
+                  ))}
+                </select>
+                <button className="btn btn-secondary" onClick={handleLinkToCase} disabled={!linkCaseId}>
+                  Link
+                </button>
+                {selectedAlert.case_id && (
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => navigate(`/cases?caseId=${selectedAlert.case_id}`)}
+                    style={{ fontSize: '0.8rem' }}
+                  >
+                    Open CASE-{String(selectedAlert.case_id).padStart(4, '0')}
+                  </button>
+                )}
+              </div>}
 
               <h4 style={{ marginTop: '2rem', marginBottom: '1rem', display: 'flex', alignItems: 'center' }}>
                 Detector Breakdown
@@ -270,8 +472,8 @@ function TriageInbox({ state, token }) {
                 <ScoreBar label="Isolation Forest Baseline" score={selectedAlert.isolation_forest} threshold={state.threshold} />
               </div>
 
-              {selectedAlert.disagreement && (
-                <div style={{ background: '#fef3c7', color: '#92400e', padding: '1rem', borderRadius: '0.5rem', marginBottom: '2rem' }}>
+              {selectedAlert.disagreement && !selectedAlert.feature_contributions?.engines?.disagreement && (
+                <div className="notice-warning" style={{ marginBottom: '2rem' }}>
                   <strong>Note:</strong> {selectedAlert.disagreement}
                 </div>
               )}
@@ -314,6 +516,16 @@ function TriageInbox({ state, token }) {
           )}
         </div>
       </div>
+
+      <EventDrillDownModal
+        alert={modalAlert}
+        onClose={() => {
+          setModalAlert(null);
+          if (alertIdParam) setSearchParams({});
+        }}
+        onAction={handleAction}
+        getSeverityColor={getSeverityColor}
+      />
     </div>
   );
 }

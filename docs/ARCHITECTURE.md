@@ -21,7 +21,7 @@ Technical architecture for the hybrid quantum-classical multi-cloud threat detec
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  Operator Surfaces                                                        │
-│  cli.py (scan|benchmark)   validate.py   frontend/ (React) + api.py      │
+│  cli.py (scan|benchmark)   validate.py   frontend/ (React) + app.py      │
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -65,7 +65,8 @@ See [POC_PLUS.md](POC_PLUS.md) for implementation status and non-claims.
 | `quantum_engine.py` | Optional variational QNN sidecar | **Yes** — circuit weights |
 | `benchmark.py` | Classical vs quantum metrics harness | Ephemeral |
 | `alerter.py` | Thresholding, ASFF/CEF, Slack dry-run | Alert history buffer |
-| `api.py` / `frontend/` | Flask API + React SPA | Long-running thread / local DB scope |
+| `models.py` | SQLite ORM: users, tenants, alerts, cases, audit | **Yes** — persistent |
+| `app.py` / `routes.py` / `frontend/` | Flask REST/SSE + React SPA; JWT + RBAC | Long-running process / local DB |
 | `cli.py` / `main.py` | CLI UX shells | Process scope |
 | `validate.py` | Deterministic loud-attack gates | Ephemeral |
 
@@ -187,7 +188,7 @@ The hybrid blend makes injected multi-signal attacks reliably separable in the p
 | CEF string | ArcSight-style CEF | Microsoft Sentinel |
 | Slack blocks | Incoming webhook JSON | SOC channel (dry-run by default) |
 
-Default threshold: **0.75** (CLI/main) or adjustable via `api.py`. Validation suite uses a slightly lower gate for clear pass/fail margins.
+Default threshold: **0.75** (CLI/main) or adjustable via the dashboard / `POST /api/controls`. Validation suite uses a slightly lower gate for clear pass/fail margins.
 
 ---
 
@@ -196,11 +197,34 @@ Default threshold: **0.75** (CLI/main) or adjustable via `api.py`. Validation su
 | Surface | Coupling | Notes |
 |---------|----------|-------|
 | `cli.py` | Warmup fit → stream mock → score → ASCII table | Blocking, rate-limited sleep |
-| `api.py` + `frontend/` | Flask REST/SSE API + React SPA | Real-time dashboards, SQLite persistence |
+| `app.py` + `routes.py` + `frontend/` | Flask REST/SSE + React SPA | JWT sessions, multi-tenant RBAC, SQLite persistence |
 | `main.py` | Explicit 4-stage logged pipeline | Best for architecture demos |
 | `validate.py` | Synthetic normal + fixed attacks | CI-friendly exit codes |
 
-All surfaces import the same four core modules — no duplicated scoring logic.
+All surfaces import the same detection modules — no duplicated scoring logic.
+
+### Application access control
+
+```text
+Browser (React SPA)
+    │  Bearer session JWT  (type=session)
+    ▼
+routes.require_auth  ──► reject mfa_temp / stream tokens
+                     ──► reject deactivated users
+    │
+    ├─ require_role(ADMIN_ROLES)  → user / tenant / playbook / controls
+    └─ tenant_id filter           → alerts, cases, audit, rules
+```
+
+| Concern | Implementation |
+|---------|----------------|
+| Identity | Local `users` table; password hashes via Werkzeug |
+| Session | HS256 JWT (`SECRET_KEY`), 12h expiry, typed (`session` / `mfa_temp` / `stream`), `tv` session revoke |
+| MFA | Optional TOTP + WebAuthn; admin can clear enrollment |
+| Authorization | Role checks + tenant scoping; last active `SUPER_ADMIN` protected |
+| Audit | `audit_logs` for privileged analyst and user-admin actions |
+
+UI surfaces: **My account** (self-service) and **Administration → Users** (lifecycle). Details: [User Guide](USER_GUIDE.md#333-administration--users), [API Reference](API_REFERENCE.md#auth--users).
 
 ---
 
@@ -223,9 +247,11 @@ All surfaces import the same four core modules — no duplicated scoring logic.
 
 Prototype assumptions:
 
-- Mock data only; no live tenant credentials required.  
+- Mock detection data only; no live cloud tenant credentials required for scoring demos.  
 - Slack URLs default to a non-routable example host with `dry_run_webhook=True`.  
 - `backend="qpu"` logs a warning and still executes on the local simulator.
+- Console auth is local JWT + optional MFA (not SSO). Default `admin` / `quantum123` is for local demos only — set `ADMIN_PASSWORD` and `SECRET_KEY` before any shared deployment.
+- Deactivated users are rejected at login and on every authenticated request.
 
 Treat alert JSON as sensitive once real identities appear; redact before sharing logs externally.
 

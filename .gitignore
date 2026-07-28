@@ -13,6 +13,7 @@ instance/
 *.sqlite3
 *.db
 .env
+.quantum_generator.lock
 
 # Node/React
 node_modules/

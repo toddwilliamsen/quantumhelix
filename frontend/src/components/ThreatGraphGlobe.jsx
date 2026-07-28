@@ -153,9 +153,9 @@ const ThreatGraphGlobe = ({ alerts, selectedIdentityId, setSelectedIdentityId, g
       
       {/* Target Marker for HQ */}
       <div style={{ position: 'absolute', top: 15, left: 15, color: 'rgba(255,255,255,0.8)', fontSize: '0.85rem', pointerEvents: 'none', background: 'rgba(0,0,0,0.7)', padding: '0.5rem', borderRadius: '4px', border: '1px solid #333' }}>
-        <div style={{ marginBottom: 4 }}><span style={{ display: 'inline-block', width: 10, height: 10, border: '2px solid #3b82f6', borderRadius: '50%', marginRight: 5 }}></span> Washington DC HQ (Target)</div>
-        <div style={{ marginBottom: 4 }}><span style={{ display: 'inline-block', width: 10, height: 10, background: '#ef4444', borderRadius: '50%', marginRight: 5 }}></span> Quantum Confirmed Anomalies</div>
-        <div style={{ fontSize: '0.7rem', color: '#888', marginTop: '0.5rem' }}>* Click any arc to drill down into the Identity</div>
+        <div style={{ marginBottom: 4 }}><span style={{ display: 'inline-block', width: 10, height: 10, border: '2px solid #3b82f6', borderRadius: '50%', marginRight: 5 }}></span> Reference location</div>
+        <div style={{ marginBottom: 4 }}><span style={{ display: 'inline-block', width: 10, height: 10, background: '#ef4444', borderRadius: '50%', marginRight: 5 }}></span> High-risk activity</div>
+        <div style={{ fontSize: '0.7rem', color: '#aaa', marginTop: '0.5rem' }}>Select an arc to inspect the associated identity.</div>
       </div>
     </div>
   );

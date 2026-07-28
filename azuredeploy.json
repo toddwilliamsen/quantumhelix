@@ -29,6 +29,25 @@
       "metadata": {
         "description": "Must be 3.12+ — numpy 2.5.x requires Python >= 3.12."
       }
+    },
+    "secretKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "JWT signing key. Required — do not leave blank."
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Bootstrap SUPER_ADMIN password (non-default required in production)."
+      }
+    },
+    "corsOrigins": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Comma-separated CORS allow-list (required when FLASK_ENV=production)."
+      }
     }
   },
   "variables": {
@@ -63,7 +82,7 @@
         "siteConfig": {
           "linuxFxVersion": "[parameters('linuxFxVersion')]",
           "alwaysOn": true,
-          "appCommandLine": "gunicorn --bind=0.0.0.0:8000 --timeout 600 --threads 4 api:app",
+          "appCommandLine": "gunicorn --bind=0.0.0.0:8000 --timeout 600 --threads 4 app:app",
           "ftpsState": "Disabled"
         }
       },
@@ -79,7 +98,11 @@
             "SCM_DO_BUILD_DURING_DEPLOYMENT": "true",
             "ENABLE_ORYX_BUILD": "true",
             "WEBSITES_PORT": "8000",
-            "SECRET_KEY": "quantum-dev-secret-key-2026"
+            "FLASK_ENV": "production",
+            "QUANTUM_STRICT_SECRETS": "1",
+            "SECRET_KEY": "[parameters('secretKey')]",
+            "ADMIN_PASSWORD": "[parameters('adminPassword')]",
+            "CORS_ORIGINS": "[parameters('corsOrigins')]"
           }
         }
       ]

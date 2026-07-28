@@ -12,8 +12,8 @@ Developer-facing reference for core modules, public classes, CLI options, and en
 | `data_processor` | `ClassicalFeaturePipeline`, `N_PRINCIPAL_COMPONENTS` |
 | `quantum_engine` | `quantum_anomaly_circuit`, `QuantumThreatDetector`, `N_QUBITS`, `N_LAYERS` |
 | `alerter` | `AlertOrchestrator`, `DEFAULT_THRESHOLD` |
-| `models` | `User`, `HistoryEvent`, `Alert`, `SuppressionRule` |
-| `api` | Flask REST API & SSE endpoints |
+| `models` | `User`, `UserSecurity`, `WebAuthnCredential`, `Tenant`, `HistoryEvent`, `Alert`, `SuppressionRule`, `IncidentCase`, `CaseComment`, `PlaybookRule`, `AuditLog` |
+| `app` / `routes` | Flask app factory + REST / SSE blueprint |
 | `cli` | `cli`, `scan`, `main` |
 | `main` | `run_pipeline`, `main` |
 | `validate` | `run_validation`, `main` |
@@ -186,23 +186,82 @@ Prog name: `Quantum Helix`.
 
 ---
 
-## Flask REST API (`api.py`)
+## Flask REST API (`app.py` + `routes.py`)
 
-Run via: `python api.py`
+Run via: `python app.py` (default `http://0.0.0.0:8000`).
 
-### Endpoints
+Most endpoints require a **session JWT** (`Authorization: Bearer <token>`). Tokens of type `mfa_temp` or `stream` are rejected by `require_auth`. Deactivated users (`is_active=false`) are rejected at login and on every authenticated request. Session JWTs include a `tv` (token version) claim; password changes, MFA clears, and deactivation bump the version and revoke outstanding sessions (12h expiry).
+
+Probes: `GET /healthz` (liveness), `GET /readyz` (DB + detectors loaded).
+
+### Auth & users
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| `POST` | `/api/login` | — | Username/password. Returns `{ token, role, username, must_change_password }`, or `{ mfa_required, temp_token, … }` when MFA is enrolled. Rejects deactivated accounts (`403`). |
+| `POST` | `/api/login/mfa` | `mfa_temp` | Complete TOTP or WebAuthn challenge; returns session payload |
+| `POST` | `/api/login/webauthn-options` | `mfa_temp` | WebAuthn authentication options for login |
+| `POST` | `/api/stream/ticket` | session | Short-lived stream JWT for EventSource (avoids putting the session token in logs) |
+| `GET` | `/api/me` | session | Current user profile |
+| `POST` | `/api/me/password` | session | Change own password (`current_password`, `new_password`; min 10 chars). Returns a fresh `token` (old session revoked). |
+| `GET` | `/api/users` | session | Admins: full directory (role, tenant, `is_active`, MFA flag, `manageable`, last login). Analysts: active tenant roster for case assignment (`id`, `username`, `role`) |
+| `POST` | `/api/users` | admin | Create user (`username`, `password`, `role`, optional `tenant_id`). New users must change password on first login. Tenant admins may only assign `TIER_1` / `TIER_2` / `READ_ONLY` |
+| `PUT`/`PATCH` | `/api/users/<id>` | admin | Update `role`, `is_active`, `username`, and (super admin) `tenant_id`. Deactivate bumps `token_version`. |
+| `POST` | `/api/users/<id>/password` | admin | Admin password reset (`must_change_password=true`, sessions revoked) |
+| `DELETE` | `/api/users/<id>/mfa` | admin | Clear TOTP / WebAuthn enrollment (sessions revoked) |
+| `DELETE` | `/api/users/<id>` | admin | Permanently delete user (clears MFA rows and case assignments) |
+
+**Roles:** `SUPER_ADMIN`, `TENANT_ADMIN`, `TIER_1`, `TIER_2`, `READ_ONLY`.
+
+**Admin management rules**
+
+- Callers cannot modify their own account via `/api/users/<id>` (use `/api/me/password` / MFA self-service).
+- Tenant admins are scoped to their tenant and cannot manage admin accounts.
+- At least one **active** `SUPER_ADMIN` must remain (demote / deactivate / delete of the last one returns `409`).
+- Password create/reset requires ≥ 10 characters.
+- Successful management actions append an `AuditLog` row.
+
+### MFA (self-service)
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| `POST` | `/api/login` | Returns JWT token |
-| `GET`  | `/api/stream` | Server-Sent Events (SSE) stream for live dashboard |
-| `GET`  | `/api/alerts` | Paginated alerts (supports `search`, `status`, `start_date`, `end_date`) |
-| `GET`  | `/api/alerts/export` | Download alerts as CSV |
-| `POST` | `/api/alert/<id>/action` | Update alert status (`acknowledge`, `escalate`, `false_positive`) |
-| `GET`  | `/api/rules` | Fetch suppression rules |
+| `GET` | `/api/mfa/status` | `{ totp_enabled, webauthn_enabled }` |
+| `POST` | `/api/mfa/setup-totp` | Begin TOTP enrollment (returns QR) |
+| `POST` | `/api/mfa/verify-totp` | Confirm TOTP code and enable |
+| `POST` | `/api/mfa/register-webauthn` | Begin WebAuthn registration |
+| `POST` | `/api/mfa/verify-webauthn-registration` | Finish WebAuthn registration |
+
+### Tenants
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| `GET` | `/api/tenants` | super admin | List tenants |
+| `POST` | `/api/tenants` | super admin | Create tenant |
+| `POST` | `/api/tenants/<id>/compliance` | super admin | Toggle compliance mode |
+
+### Stream, alerts, and controls
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `GET` | `/api/stream` | SSE live state (session or stream ticket) |
+| `GET` | `/api/alerts` | Tenant-scoped alerts (`search`, `status`, `assignee=me\|unassigned`, date filters) |
+| `GET` | `/api/alerts/export` | CSV export (same filters; includes assignee column; max 5k rows) |
+| `POST` | `/api/alert/<id>/action` | Analyst write roles. Actions: `acknowledge`, `false_positive`, `escalate` (creates case, returns `case_id`), `claim`, `release` |
+| `POST` | `/api/controls` | Update stream state (`streaming`, `threshold`, `clear`) — admins |
+| `GET` | `/api/rules` | Suppression rules |
 | `POST` | `/api/rules` | Add suppression rule |
-| `DELETE`| `/api/rules/<id>` | Remove suppression rule |
-| `POST` | `/api/controls` | Update backend state (`streaming`, `threshold`, `clear`) |
+| `DELETE` | `/api/rules/<id>` | Remove suppression rule |
+| `GET`/`POST` | `/api/playbooks` | List / create SOAR playbook rules (admins for write) |
+| `DELETE` | `/api/playbooks/<id>` | Delete playbook (admins) |
+| `GET` | `/api/audit` | Recent tenant audit log |
+| `GET`/`POST` | `/api/cases` | List / create incident cases (writes require analyst roles) |
+| `PUT` | `/api/cases/<id>` | Update status, assignee (same-tenant active user), frameworks |
+| `GET`/`POST` | `/api/cases/<id>/comments` | Case comments |
+| `GET`/`POST`/`DELETE` | `/api/cases/<id>/alerts…` | Link / unlink alerts |
+| `GET`/`POST` | `/api/playground/config` | Ensemble weight configuration (admins) |
+| `GET` | `/api/analytics/overview` | Dashboard analytics payload |
+| `GET` | `/api/benchmark` | Classical vs quantum scoreboard |
+| `POST` | `/api/ingest/webhook` | SIEM ingest: `X-API-Key` (`INGEST_API_KEY`) or session JWT. Returns `503` while detectors start. |
 
 ---
 
